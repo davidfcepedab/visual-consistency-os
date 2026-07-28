@@ -4,10 +4,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { assertRuntimeSecurity } from "./contracts.js";
+import { DetectOrphanCapturesInputSchema, GetCaptureInputSchema, ListBatchesByProjectInputSchema, createSafeReadHandlers, } from "./safe-read-tools.js";
 const PORT = Number(process.env.PORT || 8080);
 const WEB_APP_URL = requireEnv("VISUAL_OS_WEB_APP_URL");
 const SHARED_SECRET = requireEnv("VISUAL_OS_SHARED_SECRET");
 const MCP_API_KEY = process.env.MCP_API_KEY || "";
+assertRuntimeSecurity({
+    nodeEnv: process.env.NODE_ENV,
+    mcpApiKey: MCP_API_KEY,
+});
 const sessions = new Map();
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -53,15 +59,29 @@ app.all("/mcp", async (req, res) => {
         await entry.transport.handleRequest(req, res, req.body);
     }
     catch (error) {
-        console.error(error);
+        const status = typeof error === "object" &&
+            error !== null &&
+            "status" in error &&
+            typeof error.status === "number"
+            ? error.status
+            : 500;
+        const traceId = requestTraceId(req);
+        console.error(JSON.stringify({
+            event: "mcp_request_failed",
+            trace_id: traceId,
+            error_type: error instanceof Error ? error.name : "UnknownError",
+        }));
         if (!res.headersSent) {
-            res.status(500).json({
+            res.status(status).json({
                 jsonrpc: "2.0",
                 error: {
-                    code: -32603,
-                    message: errorMessage(error),
+                    code: status === 401 ? -32001 : -32603,
+                    message: status === 401
+                        ? "Unauthorized MCP request"
+                        : "Internal MCP request failed",
                 },
                 id: null,
+                trace_id: traceId,
             });
         }
     }
@@ -71,6 +91,7 @@ function createServer() {
         name: "visual-identity-os",
         version: "1.1.0",
     });
+    const safeReadHandlers = createSafeReadHandlers(appsScriptSafeReadGet);
     server.registerTool("visual_get_system_status", {
         title: "Get Visual OS status",
         description: "Returns counts and operational status from the Visual Identity OS control sheet.",
@@ -95,6 +116,21 @@ function createServer() {
             limit: z.number().int().min(1).max(200).default(50),
         },
     }, async ({ limit }) => toolResult(await appsScriptGet("captures", { limit: String(limit) })));
+    server.registerTool("visual_get_capture", {
+        title: "Get one visual capture",
+        description: "Returns exactly one capture by capture_id. It never searches by filename or performs ambiguous matching.",
+        inputSchema: GetCaptureInputSchema.shape,
+    }, async (input) => toolResult(await safeReadHandlers.getCapture(input)));
+    server.registerTool("visual_detect_orphan_captures", {
+        title: "Detect orphan visual records",
+        description: "Read-only, paginated orphan detection across captures, batches, requests, reviews, result memory, and assets. It reports conflicts without correcting them.",
+        inputSchema: DetectOrphanCapturesInputSchema.shape,
+    }, async (input) => toolResult(await safeReadHandlers.detectOrphanCaptures(input)));
+    server.registerTool("visual_list_batches_by_project", {
+        title: "List visual batches by project",
+        description: "Read-only, paginated batch listing across pending and terminal states. Empty project is an explicit supported query.",
+        inputSchema: ListBatchesByProjectInputSchema.shape,
+    }, async (input) => toolResult(await safeReadHandlers.listBatchesByProject(input)));
     server.registerTool("visual_create_session", {
         title: "Create visual session",
         description: "Creates an active visual session for rapid exploration without requiring a formal request per image.",
@@ -204,6 +240,31 @@ async function appsScriptGet(action, params = {}) {
     });
     return parseResponse(response);
 }
+async function appsScriptSafeReadGet(action, params = {}) {
+    const url = new URL(WEB_APP_URL);
+    url.searchParams.set("action", action);
+    url.searchParams.set("secret", SHARED_SECRET);
+    for (const [key, value] of Object.entries(params)) {
+        url.searchParams.set(key, value);
+    }
+    const response = await fetch(url, {
+        method: "GET",
+        redirect: "follow",
+        signal: AbortSignal.timeout(60_000),
+    });
+    const text = await response.text();
+    let parsed;
+    try {
+        parsed = JSON.parse(text);
+    }
+    catch {
+        throw new Error("Apps Script returned an invalid JSON response");
+    }
+    if (!response.ok) {
+        throw new Error(`Apps Script request failed with HTTP ${response.status}`);
+    }
+    return parsed;
+}
 async function appsScriptPost(payload) {
     const url = new URL(WEB_APP_URL);
     url.searchParams.set("secret", SHARED_SECRET);
@@ -225,16 +286,23 @@ async function parseResponse(response) {
         parsed = JSON.parse(text);
     }
     catch {
-        throw new Error(`Apps Script returned non-JSON (${response.status}): ${text.slice(0, 500)}`);
+        throw new Error(`Apps Script returned an invalid JSON response (${response.status})`);
     }
     if (!response.ok) {
-        throw new Error(`Apps Script HTTP ${response.status}: ${JSON.stringify(parsed)}`);
+        throw new Error(`Apps Script request failed with HTTP ${response.status}`);
     }
     if (typeof parsed === "object" &&
         parsed !== null &&
         "ok" in parsed &&
         parsed.ok === false) {
-        throw new Error(`Visual OS error: ${JSON.stringify(parsed)}`);
+        const code = "error" in parsed &&
+            typeof parsed.error === "object" &&
+            parsed.error !== null &&
+            "code" in parsed.error &&
+            typeof parsed.error.code === "string"
+            ? parsed.error.code.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64)
+            : "BACKEND_ERROR";
+        throw new Error(`Visual OS backend error: ${code}`);
     }
     return parsed;
 }
@@ -272,8 +340,12 @@ function requireEnv(name) {
     }
     return value;
 }
-function errorMessage(error) {
-    return error instanceof Error ? error.message : String(error);
+function requestTraceId(req) {
+    const provided = req.header("x-request-trace-id") || "";
+    if (/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(provided)) {
+        return provided;
+    }
+    return `trace-${randomUUID()}`;
 }
 app.listen(PORT, "0.0.0.0", () => {
     console.log(`Visual Identity OS MCP listening on port ${PORT}`);

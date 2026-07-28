@@ -1,59 +1,92 @@
 # Visual Identity OS MCP
 
-Remote MCP server for the existing Visual Identity OS structure.
+Remote MCP server for the Visual Identity OS control plane.
+
+This branch is an isolated, non-production integration based on the source that
+produced Cloud Run revision `visual-identity-os-mcp-00008-rr2`. It does not
+deploy, change traffic, or modify Apps Script or production data.
 
 ## Exposed tools
+
+The recovered production baseline registers these ten tools:
 
 - `visual_get_system_status`
 - `visual_list_pending_batches`
 - `visual_get_batch`
 - `visual_list_recent_captures`
 - `visual_create_session`
+- `visual_close_session`
 - `visual_create_request`
+- `visual_cancel_request`
 - `visual_submit_decision`
 - `visual_promote_asset`
+
+This branch adds three read-only tools:
+
+- `visual_get_capture`
+- `visual_detect_orphan_captures`
+- `visual_list_batches_by_project`
+
+The new tools require these Apps Script GET actions before they can be used
+end-to-end:
+
+- `capture`: exact lookup by `capture_id`
+- `orphan_snapshot`: versioned snapshot of captures, batches, requests,
+  reviews, result memory, and assets
+- `batches_catalog`: versioned batch catalog including pending and terminal
+  states
+
+Those Apps Script actions are not implemented or deployed by this branch.
+
+## Safety contract
+
+- Read tools never mutate state.
+- Missing lineage is reported as `UNKNOWN`, not as verified metadata.
+- Broken references are distinguished from absent or unknown metadata.
+- Pagination cursors are bound to a dataset revision.
+- Backend errors are returned as structured errors without response bodies,
+  prompts, tokens, or secrets.
+- `MCP_API_KEY` is mandatory when `NODE_ENV` is not `development`, `test`, or
+  `local`.
+- Mutation contracts require dry-run, idempotency, optimistic concurrency,
+  evidence, actor, reason, trace ID, and audit data. No mutation tools are
+  implemented in this block.
+- Physical deletion is not part of the contract.
+
+See [docs/SAFE_REMEDIATION_CONTRACT.md](docs/SAFE_REMEDIATION_CONTRACT.md).
 
 ## Required environment variables
 
 ```text
-VISUAL_OS_WEB_APP_URL=https://script.google.com/macros/s/AKfycbwYxC_J-3JLkrx97R5WIn3IbtTIT_z4mitSnS8ZL-7xiM9EINKHb6PYyyzx2kosId90/exec
-VISUAL_OS_SHARED_SECRET=<your Apps Script secret>
-MCP_API_KEY=<a second secret for MCP clients>
+NODE_ENV=production
+VISUAL_OS_WEB_APP_URL=<Apps Script deployment URL>
+VISUAL_OS_SHARED_SECRET=<Apps Script shared secret>
+MCP_API_KEY=<MCP client API key>
 ```
 
-## Local test
+Do not commit real values or print them in logs.
+
+## Isolated validation
+
+The recovered dependency tree is used as-is; no package installation is
+required for the contract tests:
 
 ```bash
-npm install
+npm test
 npm run build
-VISUAL_OS_WEB_APP_URL="..." \
-VISUAL_OS_SHARED_SECRET="..." \
-MCP_API_KEY="..." \
+```
+
+Local smoke test with fixture-only values:
+
+```bash
+NODE_ENV=production \
+VISUAL_OS_WEB_APP_URL="http://127.0.0.1:9" \
+VISUAL_OS_SHARED_SECRET="fixture-only" \
+MCP_API_KEY="fixture-only" \
+PORT=18080 \
 npm start
 ```
 
-Health check:
+Health endpoint: `http://localhost:18080/health`
 
-```bash
-curl http://localhost:8080/health
-```
-
-MCP endpoint:
-
-```text
-http://localhost:8080/mcp
-```
-
-## Cloud Run deployment from source
-
-```bash
-gcloud run deploy visual-identity-os-mcp \
-  --source . \
-  --region us-central1 \
-  --allow-unauthenticated \
-  --set-env-vars VISUAL_OS_WEB_APP_URL="https://script.google.com/macros/s/AKfycbwYxC_J-3JLkrx97R5WIn3IbtTIT_z4mitSnS8ZL-7xiM9EINKHb6PYyyzx2kosId90/exec" \
-  --set-env-vars VISUAL_OS_SHARED_SECRET="YOUR_APPS_SCRIPT_SECRET" \
-  --set-env-vars MCP_API_KEY="YOUR_SECOND_SECRET"
-```
-
-`--allow-unauthenticated` exposes the HTTP service, but tool access remains protected by `MCP_API_KEY`. For a later hardened revision, replace this with Cloud Run IAM/OAuth.
+MCP endpoint: `http://localhost:18080/mcp`
