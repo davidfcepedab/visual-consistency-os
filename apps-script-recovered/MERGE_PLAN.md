@@ -1,61 +1,48 @@
-# Isolated merge plan
+# Isolated merge status
 
-This plan must be applied only after the real router source is recovered into
-an isolated copy.
+## Completed locally
 
-## Phase 1: preserve the router
+1. Recovered the immutable Apps Script v10 router.
+2. Recorded all baseline source hashes.
+3. Disabled the local `clasp` project link.
+4. Preserved every existing GET and POST dispatch action.
+5. Added three GET dispatch cases to `05. WebApp.js`.
+6. Added read-only handlers in `09. SafeReads.js`.
+7. Added synthetic sheet fixtures and router regression tests.
+8. Validated the MCP client against the recovered router over local HTTP.
 
-1. Hash every recovered Apps Script source file.
-2. Record available versions and deployments.
-3. Create a fixture-only copy without Script Properties or spreadsheet IDs.
-4. Add regression tests for every existing GET and POST action.
+## Integration diff
 
-## Phase 2: add the safe reads
+Existing production file changed:
 
-Port the tested handlers from `apps-script-isolated/Code.gs` into the existing
-router without replacing its current dispatch logic:
+- `05. WebApp.js`: three GET cases route to the safe-read handler.
 
-- `capture`
-- `orphan_snapshot`
-- `batches_catalog`
+New production candidate file:
 
-Replace `getSyntheticVisualStore_()` with read-only adapters for the real sheet
-schemas. The adapters must:
+- `09. SafeReads.js`: exact capture, orphan snapshot, batch catalog, stable
+  revision, normalization, and structured errors.
 
-- resolve columns by exact header rather than position;
-- return normalized records without writing or repairing rows;
-- distinguish missing values from broken references;
-- include pending and terminal batches;
-- preserve empty project values;
-- compute a revision from stable source metadata;
-- reject duplicate exact identifiers as a protocol conflict.
+No scoring, workflow, setup, configuration, mutation, or manifest file was
+changed.
 
-## Phase 3: contract tests
+## Remaining review gate
 
-Add isolated cases for:
+Before any remote Apps Script action:
 
-- exact capture and `NOT_FOUND`;
-- invalid and duplicate capture IDs;
-- every orphan category;
-- absent sheets and required columns;
-- unknown metadata versus broken references;
-- pending and terminal batches;
-- empty project;
-- stable revision and pagination;
-- missing or invalid shared secret;
-- safe internal errors;
-- regression of all existing actions;
-- proof that GET actions do not call mutating Apps Script APIs.
+1. Review the complete v10-to-candidate diff.
+2. Decide whether post-v10 `HEAD` diagnostics must be rebased separately.
+3. If authorized, create a new isolated Apps Script project or immutable
+   version; never overwrite version 10.
+4. Run the fixture suite against that isolated deployment.
+5. Verify the three actions with copied non-production sheet data.
+6. Prepare a new deployment and rollback pointer.
 
-## Phase 4: review gate
+## Explicitly outside this merge
 
-Before any deployment, deliver:
-
-- source hashes before and after;
-- complete diff;
-- fixture test results;
-- an isolated deployment URL, if separately authorized;
-- rollback version and deployment instructions;
-- confirmation that no production spreadsheet or Script Property was changed.
-
-The metadata mutation tools remain outside this merge.
+- `visual_update_capture_metadata`
+- `visual_update_batch_metadata`
+- scoring retry
+- review decisions
+- batch resolution
+- asset promotion
+- production deployment or traffic changes
