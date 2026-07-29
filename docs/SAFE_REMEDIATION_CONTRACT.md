@@ -38,6 +38,18 @@ contract but produce zero writes and no audit ledger entries.
 
 ## Required Apps Script read actions
 
+Reference implementations of the three actions are available under
+`apps-script-isolated/`. That project is intentionally fixture-only:
+
+- it has no `SpreadsheetApp`, Drive, or external network access;
+- `doPost` is rejected;
+- its web entry point requires an isolated Script Property secret;
+- it must not replace the production `doGet` router.
+
+The production router source was not present in the recovered Cloud Build
+archive, so merging these dispatch cases remains a separate, explicitly
+authorized step.
+
 ### `capture`
 
 Input:

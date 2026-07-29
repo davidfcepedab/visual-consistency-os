@@ -27,8 +27,7 @@ This branch adds three read-only tools:
 - `visual_detect_orphan_captures`
 - `visual_list_batches_by_project`
 
-The new tools require these Apps Script GET actions before they can be used
-end-to-end:
+The new tools use these Apps Script GET actions:
 
 - `capture`: exact lookup by `capture_id`
 - `orphan_snapshot`: versioned snapshot of captures, batches, requests,
@@ -36,7 +35,9 @@ end-to-end:
 - `batches_catalog`: versioned batch catalog including pending and terminal
   states
 
-Those Apps Script actions are not implemented or deployed by this branch.
+Fixture-only reference implementations live in
+`apps-script-isolated/`. They are exercised end-to-end over local HTTP but are
+not connected, merged, or deployed to the production Apps Script project.
 
 ## Safety contract
 
@@ -75,6 +76,10 @@ required for the contract tests:
 npm test
 npm run build
 ```
+
+The test suite starts a local HTTP endpoint for the isolated Apps Script
+adapter, calls all three actions through the real MCP read client, and closes
+the endpoint without external network access.
 
 Local smoke test with fixture-only values:
 

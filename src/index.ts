@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { createAppsScriptReadClient } from "./apps-script-read-client.js";
 import { assertRuntimeSecurity } from "./contracts.js";
 import {
   DetectOrphanCapturesInputSchema,
@@ -19,6 +20,10 @@ const MCP_API_KEY = process.env.MCP_API_KEY || "";
 assertRuntimeSecurity({
   nodeEnv: process.env.NODE_ENV,
   mcpApiKey: MCP_API_KEY,
+});
+const appsScriptSafeReadGet = createAppsScriptReadClient({
+  webAppUrl: WEB_APP_URL,
+  sharedSecret: SHARED_SECRET,
 });
 
 type SessionEntry = {
@@ -373,38 +378,6 @@ async function appsScriptGet(
   });
 
   return parseResponse(response);
-}
-
-async function appsScriptSafeReadGet(
-  action: string,
-  params: Record<string, string> = {}
-): Promise<unknown> {
-  const url = new URL(WEB_APP_URL);
-  url.searchParams.set("action", action);
-  url.searchParams.set("secret", SHARED_SECRET);
-
-  for (const [key, value] of Object.entries(params)) {
-    url.searchParams.set(key, value);
-  }
-
-  const response = await fetch(url, {
-    method: "GET",
-    redirect: "follow",
-    signal: AbortSignal.timeout(60_000),
-  });
-  const text = await response.text();
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error("Apps Script returned an invalid JSON response");
-  }
-
-  if (!response.ok) {
-    throw new Error(`Apps Script request failed with HTTP ${response.status}`);
-  }
-  return parsed;
 }
 
 async function appsScriptPost(payload: Record<string, unknown>): Promise<unknown> {
