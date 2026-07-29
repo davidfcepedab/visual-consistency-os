@@ -39,6 +39,11 @@ Fixture-only reference implementations live in
 `apps-script-isolated/`. They are exercised end-to-end over local HTTP but are
 not connected, merged, or deployed to the production Apps Script project.
 
+The read-only attempt to recover the real router found that it is not visible
+to the currently authenticated Apps Script or Drive account. Evidence and the
+prepared merge plan are in
+[`apps-script-recovered/`](apps-script-recovered/RECOVERY_REPORT.md).
+
 ## Safety contract
 
 - Read tools never mutate state.
