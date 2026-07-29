@@ -39,7 +39,7 @@ app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
     ok: true,
     service: "visual-identity-os-mcp",
-    version: "1.1.0",
+    version: "1.2.0",
   });
 });
 
@@ -120,7 +120,7 @@ app.all("/mcp", async (req: Request, res: Response) => {
 function createServer(): McpServer {
   const server = new McpServer({
     name: "visual-identity-os",
-    version: "1.1.0",
+    version: "1.2.0",
   });
   const safeReadHandlers = createSafeReadHandlers(appsScriptSafeReadGet);
 

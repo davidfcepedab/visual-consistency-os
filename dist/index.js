@@ -26,7 +26,7 @@ app.get("/health", (_req, res) => {
     res.status(200).json({
         ok: true,
         service: "visual-identity-os-mcp",
-        version: "1.1.0",
+        version: "1.2.0",
     });
 });
 app.all("/mcp", async (req, res) => {
@@ -94,7 +94,7 @@ app.all("/mcp", async (req, res) => {
 function createServer() {
     const server = new McpServer({
         name: "visual-identity-os",
-        version: "1.1.0",
+        version: "1.2.0",
     });
     const safeReadHandlers = createSafeReadHandlers(appsScriptSafeReadGet);
     server.registerTool("visual_get_system_status", {

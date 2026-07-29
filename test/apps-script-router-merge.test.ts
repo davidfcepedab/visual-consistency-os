@@ -20,8 +20,7 @@ type AppsScriptGet = (event: {
 
 const ROUTER_ROOT = join(
   process.cwd(),
-  "apps-script-recovered",
-  "router-source"
+  "apps-script-production-candidate"
 );
 
 function fixtureSheets(): Record<string, unknown[][]> {
@@ -213,7 +212,7 @@ function loadRecoveredRouter() {
   for (const file of [
     "01. Config.js",
     "02. Utils.js",
-    "09. SafeReads.js",
+    "10.SafeReads.js",
     "05. WebApp.js",
   ]) {
     vm.runInContext(readFileSync(join(ROUTER_ROOT, file), "utf8"), context, {
@@ -245,13 +244,15 @@ function callGet(
   ) as UnknownRecord;
 }
 
-test("recovered v10 router keeps all ten legacy actions and adds three reads", () => {
+test("production router preserves HEAD actions and adds three reads", () => {
   const source = readFileSync(join(ROUTER_ROOT, "05. WebApp.js"), "utf8");
   for (const action of [
     "status",
     "batches",
     "batch",
     "captures",
+    "active_session",
+    "validate_schema",
     "create_session",
     "close_session",
     "create_request",
@@ -267,7 +268,7 @@ test("recovered v10 router keeps all ten legacy actions and adds three reads", (
 });
 
 test("safe-read Apps Script source contains no mutating or external APIs", () => {
-  const source = readFileSync(join(ROUTER_ROOT, "09. SafeReads.js"), "utf8");
+  const source = readFileSync(join(ROUTER_ROOT, "10.SafeReads.js"), "utf8");
   for (const forbidden of [
     "appendRow",
     "setValue",

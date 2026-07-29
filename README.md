@@ -2,6 +2,8 @@
 
 Remote MCP server for the Visual Identity OS control plane.
 
+Current candidate version: `1.2.0` with 13 registered tools.
+
 This branch is an isolated, non-production integration based on the source that
 produced Cloud Run revision `visual-identity-os-mcp-00008-rr2`. It does not
 deploy, change traffic, or modify Apps Script or production data.
