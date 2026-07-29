@@ -4,9 +4,10 @@ Remote MCP server for the Visual Identity OS control plane.
 
 Current candidate version: `1.2.0` with 13 registered tools.
 
-This branch is an isolated, non-production integration based on the source that
-produced Cloud Run revision `visual-identity-os-mcp-00008-rr2`. It does not
-deploy, change traffic, or modify Apps Script or production data.
+This branch is the controlled integration line based on the source that
+produced Cloud Run revision `visual-identity-os-mcp-00008-rr2`. Apps Script v13
+is active. Cloud Run changes are validated on tagged revisions before traffic
+is promoted, with `00008-rr2` retained as the immediate rollback.
 
 ## Exposed tools
 
@@ -56,6 +57,10 @@ baseline hashes, and the remaining review gate are in
   prompts, tokens, or secrets.
 - `MCP_API_KEY` is mandatory when `NODE_ENV` is not `development`, `test`, or
   `local`.
+- OAuth access tokens are verified with RS256 against the configured issuer
+  JWKS, issuer, and audience. Static API-key authentication remains available
+  only for controlled smoke tests and rollback access.
+- Protected-resource metadata is exposed at both standard discovery paths.
 - Mutation contracts require dry-run, idempotency, optimistic concurrency,
   evidence, actor, reason, trace ID, and audit data. No mutation tools are
   implemented in this block.
@@ -70,6 +75,10 @@ NODE_ENV=production
 VISUAL_OS_WEB_APP_URL=<Apps Script deployment URL>
 VISUAL_OS_SHARED_SECRET=<Apps Script shared secret>
 MCP_API_KEY=<MCP client API key>
+OAUTH_ISSUER=https://<tenant>.auth0.com/
+OAUTH_AUDIENCE=https://visual-identity-os-mcp
+MCP_RESOURCE_URL=https://<service-host>/mcp
+OAUTH_SCOPES=openid profile email offline_access
 ```
 
 Do not commit real values or print them in logs.

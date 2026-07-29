@@ -7,13 +7,19 @@ import { z } from "zod";
 import { createAppsScriptReadClient } from "./apps-script-read-client.js";
 import { assertRuntimeSecurity } from "./contracts.js";
 import { DetectOrphanCapturesInputSchema, GetCaptureInputSchema, ListBatchesByProjectInputSchema, createSafeReadHandlers, } from "./safe-read-tools.js";
+import { createBearerAuthenticator, createOAuthResourceMetadata, oauthResourceMetadataUrl, readOAuthConfiguration, } from "./mcp-auth.js";
 const PORT = Number(process.env.PORT || 8080);
 const WEB_APP_URL = requireEnv("VISUAL_OS_WEB_APP_URL");
 const SHARED_SECRET = requireEnv("VISUAL_OS_SHARED_SECRET");
 const MCP_API_KEY = process.env.MCP_API_KEY || "";
+const OAUTH = readOAuthConfiguration(process.env);
 assertRuntimeSecurity({
     nodeEnv: process.env.NODE_ENV,
     mcpApiKey: MCP_API_KEY,
+});
+const authenticateBearer = createBearerAuthenticator({
+    apiKey: MCP_API_KEY,
+    oauth: OAUTH,
 });
 const appsScriptSafeReadGet = createAppsScriptReadClient({
     webAppUrl: WEB_APP_URL,
@@ -29,9 +35,18 @@ app.get("/health", (_req, res) => {
         version: "1.2.0",
     });
 });
+if (OAUTH) {
+    const metadata = createOAuthResourceMetadata(OAUTH);
+    app.get([
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-protected-resource/mcp",
+    ], (_req, res) => {
+        res.status(200).json(metadata);
+    });
+}
 app.all("/mcp", async (req, res) => {
     try {
-        enforceMcpApiKey(req);
+        await authenticateBearer(req.header("authorization"), req.header("x-mcp-api-key"));
         const sessionId = req.header("mcp-session-id");
         let entry = sessionId ? sessions.get(sessionId) : undefined;
         if (!entry && req.method === "POST" && isInitializeRequest(req.body)) {
@@ -77,6 +92,9 @@ app.all("/mcp", async (req, res) => {
             error_type: error instanceof Error ? error.name : "UnknownError",
         }));
         if (!res.headersSent) {
+            if (status === 401 && OAUTH) {
+                res.setHeader("WWW-Authenticate", `Bearer resource_metadata="${oauthResourceMetadataUrl(OAUTH.resourceUrl)}"`);
+            }
             res.status(status).json({
                 jsonrpc: "2.0",
                 error: {
@@ -298,20 +316,6 @@ function toolResult(value) {
             ? value
             : { value },
     };
-}
-function enforceMcpApiKey(req) {
-    if (!MCP_API_KEY)
-        return;
-    const bearer = req.header("authorization") || "";
-    const direct = req.header("x-mcp-api-key") || "";
-    const provided = bearer.startsWith("Bearer ")
-        ? bearer.slice("Bearer ".length)
-        : direct;
-    if (provided !== MCP_API_KEY) {
-        const error = new Error("Unauthorized MCP request");
-        error.status = 401;
-        throw error;
-    }
 }
 function requireEnv(name) {
     const value = process.env[name];

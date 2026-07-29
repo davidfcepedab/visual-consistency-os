@@ -13,8 +13,9 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "express": "^5.1.0",
+    "jose": "6.2.4",
     "zod": "^4.0.0"
   },
   "devDependencies": {
