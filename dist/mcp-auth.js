@@ -10,22 +10,23 @@ export class McpAuthenticationError extends Error {
 export function readOAuthConfiguration(env) {
     const issuer = env.OAUTH_ISSUER?.trim();
     const audience = env.OAUTH_AUDIENCE?.trim();
-    const resourceUrl = env.MCP_RESOURCE_URL?.trim();
-    if (!issuer && !audience && !resourceUrl)
+    const publicUrl = (env.MCP_PUBLIC_URL || env.MCP_RESOURCE_URL)?.trim();
+    if (!issuer && !audience && !publicUrl)
         return undefined;
-    if (!issuer || !audience || !resourceUrl) {
-        throw new Error("OAUTH_ISSUER, OAUTH_AUDIENCE, and MCP_RESOURCE_URL must be configured together");
+    if (!issuer || !audience || !publicUrl) {
+        throw new Error("OAUTH_ISSUER, OAUTH_AUDIENCE, and MCP_PUBLIC_URL must be configured together");
     }
     return {
         issuer: normalizeIssuer(issuer),
         audience,
-        resourceUrl,
+        resource: env.OAUTH_RESOURCE?.trim() || audience,
+        publicUrl,
         scopes: parseScopes(env.OAUTH_SCOPES),
     };
 }
 export function createOAuthResourceMetadata(config) {
     return {
-        resource: config.resourceUrl,
+        resource: config.resource,
         authorization_servers: [config.issuer],
         bearer_methods_supported: ["header"],
         scopes_supported: config.scopes,
@@ -59,8 +60,8 @@ export function createBearerAuthenticator(input) {
         }
     };
 }
-export function oauthResourceMetadataUrl(resourceUrl) {
-    const url = new URL(resourceUrl);
+export function oauthResourceMetadataUrl(publicUrl) {
+    const url = new URL(publicUrl);
     return `${url.origin}/.well-known/oauth-protected-resource`;
 }
 function extractCredential(authorizationHeader, directApiKey) {

@@ -77,7 +77,8 @@ VISUAL_OS_SHARED_SECRET=<Apps Script shared secret>
 MCP_API_KEY=<MCP client API key>
 OAUTH_ISSUER=https://<tenant>.auth0.com/
 OAUTH_AUDIENCE=https://visual-identity-os-mcp
-MCP_RESOURCE_URL=https://<service-host>/mcp
+OAUTH_RESOURCE=https://visual-identity-os-mcp
+MCP_PUBLIC_URL=https://<service-host>/mcp
 OAUTH_SCOPES=openid profile email offline_access
 ```
 

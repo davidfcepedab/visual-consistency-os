@@ -93,7 +93,7 @@ app.all("/mcp", async (req, res) => {
         }));
         if (!res.headersSent) {
             if (status === 401 && OAUTH) {
-                res.setHeader("WWW-Authenticate", `Bearer resource_metadata="${oauthResourceMetadataUrl(OAUTH.resourceUrl)}"`);
+                res.setHeader("WWW-Authenticate", `Bearer resource_metadata="${oauthResourceMetadataUrl(OAUTH.publicUrl)}"`);
             }
             res.status(status).json({
                 jsonrpc: "2.0",

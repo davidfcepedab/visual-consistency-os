@@ -132,7 +132,7 @@ app.all("/mcp", async (req: Request, res: Response) => {
         res.setHeader(
           "WWW-Authenticate",
           `Bearer resource_metadata="${oauthResourceMetadataUrl(
-            OAUTH.resourceUrl
+            OAUTH.publicUrl
           )}"`
         );
       }

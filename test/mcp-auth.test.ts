@@ -17,7 +17,8 @@ import {
 const oauth = {
   issuer: "https://issuer.example/",
   audience: "https://visual-identity-os-mcp",
-  resourceUrl: "https://visual.example/mcp",
+  resource: "https://visual-identity-os-mcp",
+  publicUrl: "https://visual.example/mcp",
   scopes: ["openid", "profile", "email", "offline_access"],
 };
 
@@ -37,13 +38,14 @@ test("OAuth configuration normalizes issuer and scopes", () => {
     readOAuthConfiguration({
       OAUTH_ISSUER: "https://issuer.example",
       OAUTH_AUDIENCE: "https://visual-identity-os-mcp",
-      MCP_RESOURCE_URL: "https://visual.example/mcp",
+      MCP_PUBLIC_URL: "https://visual.example/mcp",
       OAUTH_SCOPES: "openid profile profile email",
     }),
     {
       issuer: "https://issuer.example/",
       audience: "https://visual-identity-os-mcp",
-      resourceUrl: "https://visual.example/mcp",
+      resource: "https://visual-identity-os-mcp",
+      publicUrl: "https://visual.example/mcp",
       scopes: ["openid", "profile", "email"],
     }
   );
@@ -51,7 +53,7 @@ test("OAuth configuration normalizes issuer and scopes", () => {
 
 test("protected resource metadata advertises Auth0-compatible OAuth", () => {
   assert.deepEqual(createOAuthResourceMetadata(oauth), {
-    resource: "https://visual.example/mcp",
+    resource: "https://visual-identity-os-mcp",
     authorization_servers: ["https://issuer.example/"],
     bearer_methods_supported: ["header"],
     scopes_supported: ["openid", "profile", "email", "offline_access"],
@@ -60,7 +62,7 @@ test("protected resource metadata advertises Auth0-compatible OAuth", () => {
       "https://visual-identity-os-mcp-4cf7h52zxa-uc.a.run.app/health",
   });
   assert.equal(
-    oauthResourceMetadataUrl(oauth.resourceUrl),
+    oauthResourceMetadataUrl(oauth.publicUrl),
     "https://visual.example/.well-known/oauth-protected-resource"
   );
 });
