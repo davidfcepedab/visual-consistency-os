@@ -1,0 +1,13 @@
+interface:
+  display_name: "Direct Visual Identity"
+  short_description: "Genera y revisa identidad visual con trazabilidad"
+  default_prompt: "Usa $direct-visual-identity para preparar o revisar una imagen con el canon V6."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "visual-identity-os-mcp"
+      description: "Estado, capturas, batches y trazabilidad de Visual Identity OS"
+      transport: "streamable_http"
+      url: "https://visual-identity-os-mcp-4cf7h52zxa-uc.a.run.app/mcp"
+policy:
+  allow_implicit_invocation: true

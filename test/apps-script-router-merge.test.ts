@@ -124,12 +124,104 @@ function fixtureSheets(): Record<string, unknown[][]> {
       ["ASSET-001", "CAP-001", "RESULT-001", "ACTIVE"],
       ["ASSET-ORPHAN", "CAP-NOT-PRESENT", "", "ACTIVE"],
     ],
+    "13_Asset_Index": [
+      ["Asset", "Character / Area", "Status", "Drive Link", "Folder", "Notes"],
+      [
+        "missing.png",
+        "David",
+        "NEEDS_REVIEW",
+        "https://drive.google.com/file/d/FILE-MISSING/view",
+        "03. Review",
+        "Synthetic missing reference",
+      ],
+    ],
     FAILURE_MEMORY: [["failure_id"], ["FAILURE-001"]],
   };
 }
 
 function normalize<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function createSyntheticDriveApp() {
+  type FixtureFile = {
+    id: string;
+    name: string;
+    mimeType: string;
+    modifiedAt: string;
+    size: number;
+  };
+  const files: Record<string, FixtureFile> = {
+    "FILE-INBOX": {
+      id: "FILE-INBOX",
+      name: "new-reference.jpg",
+      mimeType: "image/jpeg",
+      modifiedAt: "2026-08-18T10:00:00.000Z",
+      size: 100,
+    },
+    "FILE-LIBRARY": {
+      id: "FILE-LIBRARY",
+      name: "candidate.png",
+      mimeType: "image/png",
+      modifiedAt: "2026-08-18T11:00:00.000Z",
+      size: 200,
+    },
+  };
+  const iterator = <T>(items: T[]) => {
+    let index = 0;
+    return { hasNext: () => index < items.length, next: () => items[index++] };
+  };
+  const makeFile = (record: FixtureFile) => ({
+    getId: () => record.id,
+    getName: () => record.name,
+    getMimeType: () => record.mimeType,
+    getLastUpdated: () => new Date(record.modifiedAt),
+    getSize: () => record.size,
+  });
+  type FixtureFolder = {
+    getId: () => string;
+    getName: () => string;
+    getFiles: () => { hasNext: () => boolean; next: () => ReturnType<typeof makeFile> };
+    getFolders: () => { hasNext: () => boolean; next: () => FixtureFolder };
+  };
+  function makeFolder(
+    id: string,
+    name: string,
+    childFiles: FixtureFile[],
+    childFolders: FixtureFolder[] = []
+  ) {
+    return {
+      getId: () => id,
+      getName: () => name,
+      getFiles: () => iterator(childFiles.map(makeFile)),
+      getFolders: () => iterator(childFolders),
+    };
+  }
+  const review = makeFolder("FOLDER-REVIEW", "03. Review", [files["FILE-LIBRARY"]]);
+  const folders: Record<string, FixtureFolder> = {
+    "1yDdDAVD8NpoLFDu-lhJpwqe3P60AjwkA": makeFolder(
+      "1yDdDAVD8NpoLFDu-lhJpwqe3P60AjwkA",
+      "00. Inbox",
+      [files["FILE-INBOX"]]
+    ),
+    "1WCjfFllc76t7X9BEM63AFQleFeuNRD3b": makeFolder(
+      "1WCjfFllc76t7X9BEM63AFQleFeuNRD3b",
+      "05. Image Library | Organizada",
+      [],
+      [review]
+    ),
+  };
+
+  return {
+    getFolderById: (id: string) => {
+      if (!folders[id]) throw new Error("Folder not found");
+      return folders[id];
+    },
+    getFileById: (id: string) => {
+      if (!files[id]) throw new Error("File not found");
+      return makeFile(files[id]);
+    },
+  };
 }
 
 function loadRecoveredRouter() {
@@ -185,6 +277,7 @@ function loadRecoveredRouter() {
         getSheetByName: (name: string) => sheetFor(name),
       }),
     },
+    DriveApp: createSyntheticDriveApp(),
     PropertiesService: {
       getScriptProperties: () => ({
         getProperty: (name: string) =>
@@ -213,6 +306,7 @@ function loadRecoveredRouter() {
     "01. Config.js",
     "02. Utils.js",
     "10.SafeReads.js",
+    "11.LibraryReads.js",
     "05. WebApp.js",
   ]) {
     vm.runInContext(readFileSync(join(ROUTER_ROOT, file), "utf8"), context, {
@@ -244,7 +338,7 @@ function callGet(
   ) as UnknownRecord;
 }
 
-test("production router preserves HEAD actions and adds three reads", () => {
+test("production router preserves HEAD actions and adds safe maintenance reads", () => {
   const source = readFileSync(join(ROUTER_ROOT, "05. WebApp.js"), "utf8");
   for (const action of [
     "status",
@@ -262,8 +356,40 @@ test("production router preserves HEAD actions and adds three reads", () => {
     "capture",
     "orphan_snapshot",
     "batches_catalog",
+    "library_snapshot",
   ]) {
     assert.match(source, new RegExp(`case ['"]${action}['"]`));
+  }
+});
+
+test("library snapshot is versioned, read-only, and includes both registries", () => {
+  const runtime = loadRecoveredRouter();
+  const response = callGet(runtime.doGet, "library_snapshot");
+  assert.equal(response.ok, true);
+  const snapshot = response.snapshot as UnknownRecord;
+  assert.match(snapshot.revision as string, /^library-[a-f0-9]{64}$/);
+  assert.equal((snapshot.files as UnknownRecord[]).length, 2);
+  assert.ok(Array.isArray(snapshot.asset_registry));
+  assert.ok(Array.isArray(snapshot.asset_index));
+  assert.equal(runtime.writeAttempts(), 0);
+  assert.equal(JSON.stringify(runtime.sheets), runtime.original);
+});
+
+test("library-read source contains no write operations", () => {
+  const source = readFileSync(join(ROUTER_ROOT, "11.LibraryReads.js"), "utf8");
+  for (const forbidden of [
+    "appendRow",
+    "setValue",
+    "setValues",
+    "setName",
+    "moveTo",
+    "createFile",
+    "createFolder",
+    "setTrashed",
+    "UrlFetchApp",
+    "LockService",
+  ]) {
+    assert.equal(source.includes(forbidden), false, `${forbidden} must not appear`);
   }
 });
 

@@ -13,6 +13,11 @@ import {
   createSafeReadHandlers,
 } from "./safe-read-tools.js";
 import {
+  ListLibraryInventoryInputSchema,
+  PlanLibraryReconciliationInputSchema,
+  createLibraryMaintenanceHandlers,
+} from "./library-maintenance-tools.js";
+import {
   createBearerAuthenticator,
   createOAuthResourceMetadata,
   oauthResourceMetadataUrl,
@@ -35,6 +40,7 @@ const authenticateBearer = createBearerAuthenticator({
 const appsScriptSafeReadGet = createAppsScriptReadClient({
   webAppUrl: WEB_APP_URL,
   sharedSecret: SHARED_SECRET,
+  timeoutMs: 180_000,
 });
 
 type SessionEntry = {
@@ -50,7 +56,7 @@ app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
     ok: true,
     service: "visual-identity-os-mcp",
-    version: "1.2.0",
+    version: "1.3.0",
   });
 });
 
@@ -155,9 +161,12 @@ app.all("/mcp", async (req: Request, res: Response) => {
 function createServer(): McpServer {
   const server = new McpServer({
     name: "visual-identity-os",
-    version: "1.2.0",
+    version: "1.3.0",
   });
   const safeReadHandlers = createSafeReadHandlers(appsScriptSafeReadGet);
+  const libraryMaintenanceHandlers = createLibraryMaintenanceHandlers(
+    appsScriptSafeReadGet
+  );
 
   server.registerTool(
     "visual_get_system_status",
@@ -242,6 +251,44 @@ function createServer(): McpServer {
     },
     async (input) =>
       toolResult(await safeReadHandlers.listBatchesByProject(input))
+  );
+
+  server.registerTool(
+    "visual_list_library_inventory",
+    {
+      title: "List visual library inventory",
+      description:
+        "Read-only, paginated inventory of exact Drive file IDs from the Visual OS Inbox and organized library. It does not classify identity or move files.",
+      inputSchema: ListLibraryInventoryInputSchema.shape,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      toolResult(await libraryMaintenanceHandlers.listLibraryInventory(input))
+  );
+
+  server.registerTool(
+    "visual_plan_library_reconciliation",
+    {
+      title: "Plan visual library reconciliation",
+      description:
+        "Produces a deterministic dry-run plan for missing registrations, incomplete traceability, state conflicts, unavailable references, and duplicate-name candidates. Requires dry_run=true and always performs zero writes.",
+      inputSchema: PlanLibraryReconciliationInputSchema.shape,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      toolResult(
+        await libraryMaintenanceHandlers.planLibraryReconciliation(input)
+      )
   );
 
   server.registerTool(

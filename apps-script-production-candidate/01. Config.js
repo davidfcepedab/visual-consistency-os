@@ -1,5 +1,6 @@
 const STATIC_CONFIG = Object.freeze({
   SPREADSHEET_ID: '1kYsE_9d2V77CC8p2PiMHScwENngRKEvrHd2wooYqFv8',
+  PROMPT_GENERATOR_SPREADSHEET_ID: '1R9sCK5__hUld0hEaDFfB7tbuDst0PbSZSSS0Sh16NnM',
 
   SHEETS: {
     REQUESTS: 'REQUESTS',
@@ -10,6 +11,7 @@ const STATIC_CONFIG = Object.freeze({
     CAPTURES: 'CAPTURES',
     BATCHES: 'BATCHES',
     FAILURE_MEMORY: 'FAILURE_MEMORY',
+    ASSET_INDEX: '13_Asset_Index',
   },
 
   FOLDERS: {
@@ -32,6 +34,9 @@ const STATIC_CONFIG = Object.freeze({
 
     // Visible Drive name: 05 Rejected
     REJECTED: '11ihfI5DgusbA1SWx6JsoFmrRMgAHTvnO',
+
+    // Visible Drive name: 05. Image Library | Organizada
+    LIBRARY_ORGANIZED: '1WCjfFllc76t7X9BEM63AFQleFeuNRD3b',
   },
 
   DEFAULTS: {

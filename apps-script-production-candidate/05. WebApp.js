@@ -37,6 +37,11 @@ function doGet(e) {
           )
         );
 
+      case 'library_snapshot':
+        return jsonResponse_(
+          getLibraryMaintenanceSnapshotSafe_()
+        );
+
       case 'active_session':
         return jsonResponse_(getActiveVisualSession_());
 

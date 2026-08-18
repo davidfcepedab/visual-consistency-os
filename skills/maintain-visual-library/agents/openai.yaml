@@ -1,0 +1,13 @@
+interface:
+  display_name: "Visual Library Curator"
+  short_description: "Consolida biblioteca y registros visuales"
+  default_prompt: "Usa $maintain-visual-library para auditar la biblioteca visual y proponer una conciliación dry-run."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "visual-identity-os-mcp"
+      description: "Inventario y conciliación dry-run de Visual Identity OS"
+      transport: "streamable_http"
+      url: "https://visual-identity-os-mcp-4cf7h52zxa-uc.a.run.app/mcp"
+policy:
+  allow_implicit_invocation: true
