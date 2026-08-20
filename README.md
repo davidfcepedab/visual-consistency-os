@@ -2,7 +2,7 @@
 
 Remote MCP server for the Visual Identity OS control plane.
 
-Current candidate version: `1.3.0` with 15 registered tools and two focused
+Current candidate version: `1.4.1` with 16 registered tools and two focused
 agent skills.
 
 This branch is the controlled integration line based on the source that
@@ -36,6 +36,19 @@ Version 1.3.0 adds two library-maintenance tools:
 
 - `visual_list_library_inventory`
 - `visual_plan_library_reconciliation`
+
+Version 1.4.1 keeps the native-host generation handoff tool and closes the
+readiness gates that made 1.4.0 unsafe to promote:
+
+- `visual_prepare_generation`
+
+This tool resolves identity authority from CONFIG, ASSET_REGISTRY,
+`13_Asset_Index`, CAPTURES, and REQUESTS, creates a traceable request when
+ready, and returns a generation packet. The MCP never renders images and never
+infers host renderer availability from its own tool list. `READY_TO_GENERATE`
+and `request_id` are control-plane outputs, not the image. When
+`ready_to_generate=true`, the host must invoke its native image generator in
+the same turn and return the bitmap. `visual_create_request` does not generate.
 
 The inventory is paginated by a revision-bound cursor. Reconciliation only
 accepts `dry_run=true`, reports `write_count: 0`, and never moves, renames,

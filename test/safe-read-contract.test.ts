@@ -448,15 +448,26 @@ test("the ten production tools remain registered", async () => {
     "visual_submit_decision",
     "visual_promote_asset",
   ];
+  const originalThirteen = [
+    ...productionTools.slice(0, 4),
+    "visual_get_capture",
+    "visual_detect_orphan_captures",
+    "visual_list_batches_by_project",
+    ...productionTools.slice(4),
+  ];
 
   for (const tool of productionTools) {
+    assert.equal(registered.includes(tool), true, `${tool} must remain registered`);
+  }
+  for (const tool of originalThirteen) {
     assert.equal(registered.includes(tool), true, `${tool} must remain registered`);
   }
   for (const tool of [
     "visual_list_library_inventory",
     "visual_plan_library_reconciliation",
+    "visual_prepare_generation",
   ]) {
     assert.equal(registered.includes(tool), true, `${tool} must be registered`);
   }
-  assert.equal(registered.length, 15);
+  assert.equal(registered.length, 16);
 });

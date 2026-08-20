@@ -120,9 +120,39 @@ function fixtureSheets(): Record<string, unknown[][]> {
       ],
     ],
     ASSET_REGISTRY: [
-      ["asset_id", "source_capture_id", "result_id", "status"],
-      ["ASSET-001", "CAP-001", "RESULT-001", "ACTIVE"],
-      ["ASSET-ORPHAN", "CAP-NOT-PRESENT", "", "ACTIVE"],
+      [
+        "asset_id",
+        "source_capture_id",
+        "result_id",
+        "status",
+        "subjects",
+        "scope",
+        "source_file_id",
+        "drive_url",
+        "allowed_use",
+        "prohibited_use",
+      ],
+      [
+        "ASSET-001",
+        "CAP-001",
+        "RESULT-001",
+        "ACTIVE",
+        "DAVID",
+        "Identity Anchor",
+        "FILE-DAVID-P0",
+        "https://drive.google.com/file/d/FILE-DAVID-P0/view",
+        "identity",
+        "face blending",
+      ],
+      ["ASSET-ORPHAN", "CAP-NOT-PRESENT", "", "ACTIVE", "", "", "", "", "", ""],
+    ],
+    CONFIG: [
+      ["key", "value"],
+      ["ACTIVE_DAVID_MASTER_PACK_ID", "PACK-DAVID-V5"],
+      ["ACTIVE_COUPLE_P0_REGISTER_ID", "AST-COUPLE-P0"],
+      ["AUTO_IDENTITY_PROMOTION", "FALSE"],
+      ["HUMAN_APPROVAL_REQUIRED", "TRUE"],
+      ["SERIES_OUTPUT_POLICY", "ONE_IMAGE_PER_GENERATION"],
     ],
     "13_Asset_Index": [
       ["Asset", "Character / Area", "Status", "Drive Link", "Folder", "Notes"],
@@ -307,6 +337,7 @@ function loadRecoveredRouter() {
     "02. Utils.js",
     "10.SafeReads.js",
     "11.LibraryReads.js",
+    "12.GenerationContext.js",
     "05. WebApp.js",
   ]) {
     vm.runInContext(readFileSync(join(ROUTER_ROOT, file), "utf8"), context, {
@@ -357,9 +388,13 @@ test("production router preserves HEAD actions and adds safe maintenance reads",
     "orphan_snapshot",
     "batches_catalog",
     "library_snapshot",
+    "generation_context",
   ]) {
     assert.match(source, new RegExp(`case ['"]${action}['"]`));
   }
+  assert.match(source, /function createFormalRequest_\(payload\)/);
+  assert.match(source, /return withLock_\(\(\) => \{/);
+  assert.match(source, /function findRequestByTraceId_\(sheet, traceId\)/);
 });
 
 test("library snapshot is versioned, read-only, and includes both registries", () => {
@@ -373,6 +408,43 @@ test("library snapshot is versioned, read-only, and includes both registries", (
   assert.ok(Array.isArray(snapshot.asset_index));
   assert.equal(runtime.writeAttempts(), 0);
   assert.equal(JSON.stringify(runtime.sheets), runtime.original);
+});
+
+test("generation context is versioned, read-only, and exposes CONFIG plus registries", () => {
+  const runtime = loadRecoveredRouter();
+  const response = callGet(runtime.doGet, "generation_context");
+  assert.equal(response.ok, true);
+  const snapshot = response.snapshot as UnknownRecord;
+  assert.match(snapshot.revision as string, /^generation-[a-f0-9]{64}$/);
+  const config = snapshot.config as Record<string, unknown>;
+  assert.equal(config.ACTIVE_DAVID_MASTER_PACK_ID, "PACK-DAVID-V5");
+  assert.equal(config.AUTO_IDENTITY_PROMOTION, "FALSE");
+  assert.equal(config.SERIES_OUTPUT_POLICY, "ONE_IMAGE_PER_GENERATION");
+  assert.ok(Array.isArray(snapshot.asset_registry));
+  assert.ok(Array.isArray(snapshot.asset_index));
+  assert.ok(Array.isArray(snapshot.captures));
+  assert.ok(Array.isArray(snapshot.requests));
+  assert.equal(runtime.writeAttempts(), 0);
+  assert.equal(JSON.stringify(runtime.sheets), runtime.original);
+});
+
+test("generation-context source contains no write or render operations", () => {
+  const source = readFileSync(join(ROUTER_ROOT, "12.GenerationContext.js"), "utf8");
+  for (const forbidden of [
+    "appendRow",
+    "setValue",
+    "setValues",
+    "setName",
+    "moveTo",
+    "createFile",
+    "createFolder",
+    "setTrashed",
+    "UrlFetchApp",
+    "LockService",
+    "generateContent",
+  ]) {
+    assert.equal(source.includes(forbidden), false, `${forbidden} must not appear`);
+  }
 });
 
 test("library-read source contains no write operations", () => {

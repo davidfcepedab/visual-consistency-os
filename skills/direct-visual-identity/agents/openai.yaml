@@ -6,7 +6,7 @@ dependencies:
   tools:
     - type: "mcp"
       value: "visual-identity-os-mcp"
-      description: "Estado, capturas, batches y trazabilidad de Visual Identity OS"
+      description: "Control plane de identidad visual, trazabilidad y paquete de generación nativa del host"
       transport: "streamable_http"
       url: "https://visual-identity-os-mcp-4cf7h52zxa-uc.a.run.app/mcp"
 policy:

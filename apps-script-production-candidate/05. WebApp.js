@@ -42,6 +42,11 @@ function doGet(e) {
           getLibraryMaintenanceSnapshotSafe_()
         );
 
+      case 'generation_context':
+        return jsonResponse_(
+          getGenerationContextSafe_()
+        );
+
       case 'active_session':
         return jsonResponse_(getActiveVisualSession_());
 
@@ -493,89 +498,155 @@ function closeVisualSession_(payload) {
 }
 
 function createFormalRequest_(payload) {
-  const project = String(
-    payload.project || ''
-  ).trim();
+  return withLock_(() => {
+    const project = String(
+      payload.project || ''
+    ).trim();
 
-  const subjects = Array.isArray(
-    payload.subjects
-  )
-    ? payload.subjects
-        .map(String)
-        .join(' + ')
-    : String(
-        payload.subjects || ''
-      ).trim();
+    const subjects = Array.isArray(
+      payload.subjects
+    )
+      ? payload.subjects
+          .map(String)
+          .join(' + ')
+      : String(
+          payload.subjects || ''
+        ).trim();
 
-  const prompt = String(
-    payload.prompt || ''
-  ).trim();
+    const prompt = String(
+      payload.prompt || ''
+    ).trim();
 
-  if (!project) {
-    throw new Error('project is required');
-  }
-
-  if (!subjects) {
-    throw new Error('subjects are required');
-  }
-
-  if (!prompt) {
-    throw new Error('prompt is required');
-  }
-
-  const requestId = newId_('REQ');
-
-  appendObject_(
-    getSheet_(
-      STATIC_CONFIG.SHEETS.REQUESTS
-    ),
-    {
-      request_id: requestId,
-      created_at: nowIso_(),
-      status: 'READY_TO_GENERATE',
-      project,
-      subjects,
-      scene: String(
-        payload.scene || ''
-      ),
-      mode: String(
-        payload.mode ||
-          'MANUAL_GENERATION'
-      ),
-      mechanism: String(
-        payload.generator || 'OTHER'
-      ),
-      pack_version: String(
-        payload.pack_version || ''
-      ),
-      prompt,
-      parent_request_id: String(
-        payload.parent_request_id || ''
-      ),
-      source_result_id: String(
-        payload.source_result_id || ''
-      ),
-      iteration: Number(
-        payload.iteration || 1
-      ),
-      notes: String(
-        payload.notes || ''
-      ),
+    if (!project) {
+      throw new Error('project is required');
     }
-  );
 
-  return {
-    ok: true,
-    request: {
-      request_id: requestId,
-      status: 'READY_TO_GENERATE',
+    if (!subjects) {
+      throw new Error('subjects are required');
+    }
 
-      expected_filename:
-        `${requestId} - ` +
-        `${sanitizeVisibleName_(project)} - ` +
-        `v01.png`,
-    },
-  };
+    if (!prompt) {
+      throw new Error('prompt is required');
+    }
+
+    const sheet = getSheet_(
+      STATIC_CONFIG.SHEETS.REQUESTS
+    );
+    const traceId = String(
+      payload.trace_id || ''
+    ).trim();
+    const existing = traceId
+      ? findRequestByTraceId_(sheet, traceId)
+      : null;
+
+    if (existing && existing.request_id) {
+      return {
+        ok: true,
+        reused: true,
+        request: {
+          request_id: existing.request_id,
+          status:
+            existing.status ||
+            'REQUEST_CREATED',
+          expected_filename:
+            `${existing.request_id} - ` +
+            `${sanitizeVisibleName_(project)} - ` +
+            `v01.png`,
+        },
+      };
+    }
+
+    const requestId = newId_('REQ');
+    // P0 fix: a request is only READY_TO_GENERATE when the caller has
+    // already run visual_prepare_generation and passes that status
+    // explicitly (see prepare-generation-tools.ts). Direct
+    // visual_create_request calls (bookkeeping-only, no preflight) default
+    // to REQUEST_CREATED so status stops implying references were resolved.
+    const status = String(
+      payload.status || 'REQUEST_CREATED'
+    );
+
+    appendObject_(
+      sheet,
+      {
+        request_id: requestId,
+        created_at: nowIso_(),
+        status,
+        project,
+        subjects,
+        scene: String(
+          payload.scene || ''
+        ),
+        mode: String(
+          payload.mode ||
+            'MANUAL_GENERATION'
+        ),
+        mechanism: String(
+          payload.generator || 'OTHER'
+        ),
+        pack_version: String(
+          payload.pack_version || ''
+        ),
+        prompt,
+        parent_request_id: String(
+          payload.parent_request_id || ''
+        ),
+        source_result_id: String(
+          payload.source_result_id || ''
+        ),
+        iteration: Number(
+          payload.iteration || 1
+        ),
+        trace_id: traceId,
+        notes: String(
+          payload.notes ||
+            (traceId ? `trace_id=${traceId}` : '')
+        ),
+      }
+    );
+
+    return {
+      ok: true,
+      request: {
+        request_id: requestId,
+        status,
+
+        expected_filename:
+          `${requestId} - ` +
+          `${sanitizeVisibleName_(project)} - ` +
+          `v01.png`,
+      },
+    };
+  });
+}
+
+function findRequestByTraceId_(sheet, traceId) {
+  const data = sheet.getDataRange().getValues();
+  if (data.length < 2) return null;
+  const indexes = indexHeaders_(data[0]);
+  const needle = `trace_id=${traceId}`;
+  for (let i = 1; i < data.length; i++) {
+    const notes = String(
+      data[i][indexes.notes] || ''
+    );
+    const stored =
+      indexes.trace_id === undefined
+        ? ''
+        : String(data[i][indexes.trace_id] || '').trim();
+    if (stored === traceId || notes.indexOf(needle) !== -1) {
+      return {
+        request_id: String(
+          data[i][indexes.request_id] || ''
+        ),
+        status: String(
+          indexes.status === undefined
+            ? 'REQUEST_CREATED'
+            : data[i][indexes.status] || 'REQUEST_CREATED'
+        ),
+      };
+    }
+  }
+  return null;
 }
 
 function cancelFormalRequest_(payload) {
@@ -673,6 +744,7 @@ function cancelFormalRequest_(payload) {
   const cancellableStatuses = [
     '',
     'REQUESTED',
+    'REQUEST_CREATED',
     'READY_TO_GENERATE',
   ];
 

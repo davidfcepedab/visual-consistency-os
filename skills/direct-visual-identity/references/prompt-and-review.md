@@ -15,6 +15,10 @@ Incluir solo lo necesario:
 
 Cambiar una dimensión principal por lote: identidad, pose/encuadre, wardrobe, location, iluminación o expresión.
 
+## Handoff al host
+
+`visual_prepare_generation` prepara el paquete; el HOST renderiza en el mismo turno. `ready_to_generate=true` es el disparador del generador nativo, no el resultado final. No detenerse en `request_id` ni `READY_TO_GENERATE`. `visual_create_request` no produce bitmap. No concluir que la generación es imposible porque el MCP no tenga una tool de render. `ready_to_generate=false` solo vale cuando falta autoridad visual obligatoria.
+
 ## Revisión
 
 Separar evidencia observable de inferencia. Revisar, cuando estén respaldados:

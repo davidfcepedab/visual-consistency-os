@@ -18,6 +18,10 @@ import {
   createLibraryMaintenanceHandlers,
 } from "./library-maintenance-tools.js";
 import {
+  PrepareGenerationInputSchema,
+  createPrepareGenerationHandlers,
+} from "./prepare-generation-tools.js";
+import {
   createBearerAuthenticator,
   createOAuthResourceMetadata,
   oauthResourceMetadataUrl,
@@ -56,7 +60,7 @@ app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
     ok: true,
     service: "visual-identity-os-mcp",
-    version: "1.3.0",
+    version: "1.4.1",
   });
 });
 
@@ -161,12 +165,16 @@ app.all("/mcp", async (req: Request, res: Response) => {
 function createServer(): McpServer {
   const server = new McpServer({
     name: "visual-identity-os",
-    version: "1.3.0",
+    version: "1.4.1",
   });
   const safeReadHandlers = createSafeReadHandlers(appsScriptSafeReadGet);
   const libraryMaintenanceHandlers = createLibraryMaintenanceHandlers(
     appsScriptSafeReadGet
   );
+  const prepareGenerationHandlers = createPrepareGenerationHandlers({
+    read: appsScriptSafeReadGet,
+    write: appsScriptPost,
+  });
 
   server.registerTool(
     "visual_get_system_status",
@@ -292,6 +300,24 @@ function createServer(): McpServer {
   );
 
   server.registerTool(
+    "visual_prepare_generation",
+    {
+      title: "Prepare native image generation",
+      description:
+        "Resolves visual identity authority and returns a generation packet for the HOST native image generator. This MCP never renders images and must not be interpreted as image generation being unavailable. READY_TO_GENERATE and request_id are control-plane outputs, not the image. If ready_to_generate is true, the host MUST invoke its native image generator in the same turn using final_generation_prompt and identity_authority references, then return the bitmap. Do not stop after creating the request. ready_to_generate=false only when mandatory visual context is missing.",
+      inputSchema: PrepareGenerationInputSchema.shape,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      toolResult(await prepareGenerationHandlers.prepareGeneration(input))
+  );
+
+  server.registerTool(
     "visual_create_session",
     {
       title: "Create visual session",
@@ -339,7 +365,7 @@ function createServer(): McpServer {
     {
       title: "Create formal visual request",
       description:
-        "Creates a traceable production request with prompt and project context.",
+        "Creates a traceable production request with prompt and project context. This is control-plane bookkeeping only and does not render an image. For generation, call visual_prepare_generation and then invoke the host native image generator in the same turn.",
       inputSchema: {
         project: z.string().min(1),
         subjects: z.array(z.string().min(1)).min(1),
