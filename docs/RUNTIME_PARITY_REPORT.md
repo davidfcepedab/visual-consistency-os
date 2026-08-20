@@ -1,5 +1,25 @@
 # RUNTIME_PARITY_REPORT — AGENT A (executed directly by Orchestrator, not delegated)
 
+> **CORRECTION (same session, before any deploy action was taken):** the
+> initial version of this report below concluded `visual_prepare_generation`
+> was absent from production, based on `git log`/`git show HEAD` — i.e. only
+> committed state. That inference was **wrong** for this deployment method.
+> `gcloud run deploy --source` tars up the working directory as it exists at
+> deploy time, independent of git. Downloading and inspecting the *actual*
+> Cloud Build source archive for the live revision
+> (`gs://run-sources-.../1787183317.929859-b9be9c4c77864f52a45aac7d31c3a44c.zip`,
+> the input to Cloud Build `c52341e3`, which produced revision
+> `visual-identity-os-mcp-00015-kif`, tag `native-handoff`, **100% traffic**,
+> deployed 2026-08-19T23:49 UTC) shows its `src/index.ts` **does** register
+> `visual_prepare_generation` (confirmed by direct string match at the same
+> line number as the current working tree). **Corrected conclusion:
+> `visual_prepare_generation` was already live in production, deployed
+> hours before this session started — most likely by the same prior
+> "native-handoff 1.4.0" work referenced in the original audit.** Sections
+> 3/4/7/8 below are superseded by this correction; kept for the record of
+> how the false negative happened (relying on git alone is not sufficient
+> evidence for `--source` deployments).
+
 Determined by direct inspection (`git log/status/diff`, `gcloud run services
 describe/revisions list`, `gcloud builds list`, `curl /health`) rather than a
 subagent — the answer was reachable in a handful of fast, sequential
@@ -71,8 +91,27 @@ deployed, because it has never been committed. `00015-kif` is simply the
 most recent snapshot of a working tree that predates this feature's
 addition.
 
-## P0 action taken
+## Corrected root cause of any observed "client sees fewer tools"
 
-Commit the working tree (this session's status-contract fix included),
-build, and redeploy via `gcloud run deploy --source` from the fixed working
-tree — see `DEPLOYMENT_LOG.md` for the executed steps and resulting revision.
+Not a deployment gap (production already had all 16 tools including
+`visual_prepare_generation` before this session touched anything). The
+remaining plausible explanations, in order of likelihood, are outside what
+git/Cloud Build inspection can resolve from here:
+
+1. **Client-side tool-list caching** — MCP clients (ChatGPT/Codex connector
+   apps) typically cache the tool manifest at connection time and only
+   refresh on reconnect. If the client connected before 2026-08-19T23:49
+   UTC, it is showing a stale (15-tool) list from before that deploy.
+2. The unrelated, previously-flagged client OAuth session issue (out of
+   scope here per instruction — not re-investigated).
+
+Neither requires a code change; both require the user to reconnect/refresh
+the connector, which only the user can do from their client.
+
+## P0 action actually taken (this session)
+
+The one genuinely new, not-yet-deployed change from this session is the
+request-status contract fix (`REQUEST_CREATED` vs `READY_TO_GENERATE`,
+`blockerToStatusCode`) — see the parent commit. That was committed, built,
+and redeployed via `gcloud run deploy --source` — see `DEPLOYMENT_LOG.md`
+for the executed steps and resulting revision.
