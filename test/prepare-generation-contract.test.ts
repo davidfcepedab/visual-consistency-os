@@ -466,6 +466,50 @@ test("P1 — candidate identity without approval is not ready", () => {
   assert.equal(packet.host_handoff.action, "DO_NOT_INVOKE_GENERATOR");
 });
 
+test("P0 — a Status-only approval convention (no human_anchor_approval column) is honored as verified", () => {
+  // Regression for the real 13_Asset_Index schema, which has no
+  // human_anchor_approval/approved_by column at all -- only a Status
+  // string. "ACTIVE" alone must stay unverified (previous test); the
+  // specific approval-outcome statuses below must not.
+  for (const status of ["PRIORITY_0_PRIMARY", "PRIORITY_0_APPROVED", "APPROVED_TOP", "APPROVED_GOOD"]) {
+    const packet = prepareGenerationPacket(
+      {
+        project: "TEST-STATUS-CONVENTION",
+        subjects: ["David"],
+        user_instruction: "Create one photorealistic portrait of David.",
+        scene: "",
+        generator: "CHATGPT_IMAGE",
+        mode: "GENERATE",
+        base_capture_id: "",
+        parent_request_id: "",
+        source_result_id: "",
+        iteration: 1,
+        trace_id: `trace-status-${status}`,
+      },
+      {
+        ...authoritySnapshot(),
+        asset_index: [
+          {
+            Asset: "DAVID_APPROVED_ANCHOR_STATUS_TEST.jpeg",
+            "Character / Area": "David",
+            Status: status,
+            "Drive Link": "https://drive.google.com/file/d/FILE-DAVID-STATUS-TEST/view",
+            Folder: "David/01. Priority 0 | Approved Identity Anchors/DAVID_APPROVED_ANCHOR_STATUS_TEST.jpeg",
+            Notes: "Anchor",
+          },
+        ],
+        asset_registry: [],
+      },
+      `trace-status-${status}`
+    );
+    assert.equal(
+      packet.identity_authority[0]?.primary_identity_anchor?.verification_status,
+      "VERIFIED_SOURCE",
+      `Status=${status} should be treated as human-verified`
+    );
+  }
+});
+
 test("P1 — required anchor is attached to files and prompt", async () => {
   const result = await handlersFor(authoritySnapshot()).prepareGeneration({
     project: "TEST-NATIVE-HANDOFF",

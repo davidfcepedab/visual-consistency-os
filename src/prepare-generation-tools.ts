@@ -307,23 +307,62 @@ function statusOf(record: UnknownRecord): string {
   return field(record, "status", "Status").toUpperCase();
 }
 
+// P0 fix: the Prompt Generator's 13_Asset_Index sheet (an external sheet
+// with no human_anchor_approval/approved_by columns at all) records human
+// governance decisions as an explicit Status string instead -- confirmed
+// as the real convention already in use for David's own healthy Priority 0
+// anchors (DAVID_APPROVED_ANCHOR_*), not just Juan's. The original fixed
+// lists below only matched a schema (human_anchor_approval column,
+// "PRIORITY_0" as a bare literal) that this sheet never actually uses, so
+// every asset_index-sourced candidate -- including already-approved ones --
+// was being filtered out before verification was even checked, and the
+// resolver silently fell back to a deprecated/broken duplicate row instead.
+// Candidates the resolver will even consider (broader -- "in scope", not
+// yet "verified"). "ACTIVE" alone deliberately stays here and NOT in
+// VERIFIED_APPROVAL_STATUS_VALUES below: a record can be usable/current
+// without having been through a human approval decision (see the P1
+// "candidate identity without approval is not ready" test, which relies on
+// exactly that distinction).
+const USABLE_STATUS_VALUES = [
+  "ACTIVE",
+  "APPROVED",
+  "PRIORITY_0",
+  "PRIORITY_0_PRIMARY",
+  "PRIORITY_0_APPROVED",
+  "APPROVED_TOP",
+  "APPROVED_GOOD",
+  "IDENTITY_MASTER",
+  "READY",
+  "PUBLICATION READY",
+];
+
+// Status values that themselves constitute a completed human approval
+// decision, for sheets (like the Prompt Generator's 13_Asset_Index) that
+// have no dedicated human_anchor_approval/approved_by column at all.
+// Deliberately narrower than USABLE_STATUS_VALUES and excludes
+// "IDENTITY_MASTER"/"ACTIVE"/"PRIORITY_0"/"READY": those are too generic
+// and, in practice, also describe deprecated/superseded duplicate rows --
+// including them here would let a stale row outrank a real approved one
+// via the verifiedIdentity[0] fallback in resolveSubjectAuthority().
+const VERIFIED_APPROVAL_STATUS_VALUES = [
+  "APPROVED",
+  "PRIORITY_0_PRIMARY",
+  "PRIORITY_0_APPROVED",
+  "APPROVED_TOP",
+  "APPROVED_GOOD",
+];
+
 function isUsableStatus(record: UnknownRecord): boolean {
   const status = statusOf(record);
   if (!status) return false;
-  return [
-    "ACTIVE",
-    "APPROVED",
-    "PRIORITY_0",
-    "IDENTITY_MASTER",
-    "READY",
-    "PUBLICATION READY",
-  ].includes(status);
+  return USABLE_STATUS_VALUES.includes(status);
 }
 
 function isVerifiedApproval(record: UnknownRecord): boolean {
   const approval = field(record, "human_anchor_approval").toUpperCase();
   if (["APPROVED", "TRUE", "YES"].includes(approval)) return true;
-  return Boolean(field(record, "approved_by"));
+  if (field(record, "approved_by")) return true;
+  return VERIFIED_APPROVAL_STATUS_VALUES.includes(statusOf(record));
 }
 
 function isVerifiedFacialAnchor(anchor: VisualAnchor | null | undefined): boolean {
