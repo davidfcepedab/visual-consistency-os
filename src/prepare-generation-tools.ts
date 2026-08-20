@@ -58,6 +58,9 @@ export type SubjectIdentityAuthority = {
   // P0 FIX: true if multiple DISTINCT physical identity packs are verified
   // for this subject (genuine conflict, not mirroring the same pack).
   ambiguous_identity?: boolean;
+  // Diagnostic: imperfect provenance exists. Unsafe only when competing
+  // authorities remain unresolved after normalization.
+  provenance_conflict?: boolean;
 };
 
 export type Blocker = {
@@ -71,8 +74,21 @@ export type Blocker = {
     | "MISSING_EDIT_BASE"
     | "AMBIGUOUS_IDENTITY_AUTHORITY"
     | "PROVENANCE_CONFLICT"
-    | "SUBJECT_IDENTITY_MIXING";
+    | "SUBJECT_IDENTITY_MIXING"
+    | "REQUIRED_LOCATION_ANCHOR_MISSING";
   message: string;
+  subject?: string;
+  location?: string;
+};
+
+export type GenerationWarning = {
+  code:
+    | "PROVENANCE_CONFLICT"
+    | "AMBIGUOUS_IDENTITY_AUTHORITY_RESOLVED"
+    | "LOCATION_TEXT_FALLBACK";
+  message: string;
+  subject?: string;
+  location?: string;
 };
 
 /**
@@ -92,6 +108,7 @@ export function blockerToStatusCode(
     case "MISSING_PRIORITY_0":
     case "MISSING_REQUIRED_REFERENCE":
     case "MISSING_EDIT_BASE":
+    case "REQUIRED_LOCATION_ANCHOR_MISSING":
       return "BLOCKED_REFERENCE_MISSING";
     case "INVALID_BASE_CAPTURE":
     case "INVALID_EDIT_SOURCE":
@@ -135,6 +152,7 @@ export type GenerationPacket = {
   final_generation_prompt: string;
   reference_files: VisualAnchor[];
   blockers: Blocker[];
+  warnings: GenerationWarning[];
   guardrails: {
     auto_identity_promotion: false;
     human_approval_required: boolean;
@@ -519,6 +537,330 @@ function pushUnique(list: VisualAnchor[], item: VisualAnchor): void {
   if (!list.some((existing) => sameAnchor(existing, item))) list.push(item);
 }
 
+function hasProvenanceConflictMarker(anchor: VisualAnchor | null | undefined): boolean {
+  return Boolean(
+    anchor && /conflict|needs_review|unknown/i.test(anchor.provenance || "")
+  );
+}
+
+function normalizeIdentityCandidates(
+  authority: SubjectIdentityAuthority
+): VisualAnchor[] {
+  const candidates: VisualAnchor[] = [];
+  if (authority.primary_identity_anchor) {
+    pushUnique(candidates, authority.primary_identity_anchor);
+  }
+  for (const ref of authority.priority_0_refs) pushUnique(candidates, ref);
+  return candidates;
+}
+
+function isPhysicallyAvailable(candidate: VisualAnchor): boolean {
+  const status = (candidate.status || "").toUpperCase();
+  if (["NOT_FOUND", "404", "BROKEN", "INACCESSIBLE"].includes(status)) {
+    return false;
+  }
+  return Boolean(candidate.file_id || candidate.asset_id);
+}
+
+function isActiveIdentityAuthority(candidate: VisualAnchor): boolean {
+  if (candidate.role === "Couple Relationship Anchor") return false;
+  return candidate.verification_status === "VERIFIED_SOURCE";
+}
+
+function dedupeByFileId(candidates: VisualAnchor[]): VisualAnchor[] {
+  const byFile = new Map<string, VisualAnchor>();
+  for (const candidate of candidates) {
+    const physicalId = candidate.file_id || candidate.asset_id || "UNKNOWN";
+    if (!byFile.has(physicalId)) byFile.set(physicalId, candidate);
+  }
+  return Array.from(byFile.values());
+}
+
+function identityRank(anchor: VisualAnchor): number {
+  const status = (anchor.status || "").toUpperCase();
+  if (status === "PRIORITY_0_PRIMARY") return 4;
+  if (status === "PRIORITY_0_APPROVED") return 3;
+  if (status === "APPROVED_TOP") return 2;
+  if (status === "APPROVED_GOOD" || status === "APPROVED") return 1;
+  return 0;
+}
+
+function resolveCanonicalAuthority(
+  deduped: VisualAnchor[],
+  authority?: SubjectIdentityAuthority
+): { anchor: VisualAnchor; deterministic: boolean } | null {
+  if (deduped.length === 0) return null;
+  if (deduped.length === 1) {
+    return { anchor: deduped[0], deterministic: true };
+  }
+
+  const packId = authority?.master_pack_id || "";
+  if (packId) {
+    const packMatches = deduped.filter((anchor) =>
+      [anchor.asset_id, anchor.file_id, stringValue(anchor.file_name)].includes(
+        packId
+      )
+    );
+    const packIds = unique(
+      packMatches.map((anchor) => anchor.file_id || anchor.asset_id)
+    );
+    if (packIds.length === 1) {
+      return { anchor: packMatches[0], deterministic: true };
+    }
+  }
+
+  const primaries = deduped.filter(
+    (anchor) => (anchor.status || "").toUpperCase() === "PRIORITY_0_PRIMARY"
+  );
+  const primaryIds = unique(
+    primaries.map((anchor) => anchor.file_id || anchor.asset_id)
+  );
+  if (primaryIds.length === 1) {
+    const winner =
+      primaries.find(
+        (anchor) => (anchor.file_id || anchor.asset_id) === primaryIds[0]
+      ) || primaries[0];
+    return { anchor: winner, deterministic: true };
+  }
+
+  const ranked = [...deduped].sort(
+    (left, right) => identityRank(right) - identityRank(left)
+  );
+  return { anchor: ranked[0], deterministic: false };
+}
+
+function containsIncompatibleActiveAuthorities(deduped: VisualAnchor[]): boolean {
+  if (deduped.length <= 1) return false;
+  const primaryIds = unique(
+    deduped
+      .filter(
+        (anchor) => (anchor.status || "").toUpperCase() === "PRIORITY_0_PRIMARY"
+      )
+      .map((anchor) => anchor.file_id || anchor.asset_id)
+  );
+  if (primaryIds.length > 1) return true;
+  if (primaryIds.length === 0) return true;
+  return false;
+}
+
+function hasUsableIdentityAuthority(
+  authority: SubjectIdentityAuthority,
+  detailLocks: VisualAnchor[] = []
+): boolean {
+  const verifiedDetail = detailLocks.filter(
+    (lock) =>
+      lock.subject === authority.subject && isVerifiedFacialAnchor(lock)
+  );
+  return (
+    isVerifiedFacialAnchor(authority.primary_identity_anchor) ||
+    authority.priority_0_refs.some(isVerifiedFacialAnchor) ||
+    (authority.subject === "Mambo" &&
+      (verifiedDetail.length > 0 ||
+        authority.supporting_anchors.some(isVerifiedFacialAnchor)))
+  );
+}
+
+// Generation should be blocked only when authority cannot be
+// deterministically and safely resolved.
+// A deterministic winner means imperfect data, not unsafe generation.
+export function hasUnresolvedCompetingAuthorities(
+  authority: SubjectIdentityAuthority
+): boolean {
+  const candidates = normalizeIdentityCandidates(authority)
+    .filter((candidate) => isPhysicallyAvailable(candidate))
+    .filter((candidate) => isActiveIdentityAuthority(candidate));
+
+  const deduped = dedupeByFileId(candidates);
+
+  // Zero authority is handled separately.
+  if (deduped.length <= 1) return false;
+
+  const canonical = resolveCanonicalAuthority(deduped, authority);
+
+  // A deterministic winner means imperfect data, not unsafe generation.
+  if (canonical && canonical.deterministic === true) {
+    return false;
+  }
+
+  return containsIncompatibleActiveAuthorities(deduped);
+}
+
+function extractRequestedLocations(parsed: PrepareGenerationInput): string[] {
+  const text = `${parsed.scene || ""} ${parsed.user_instruction || ""}`;
+  return unique(text.match(/@loc_[A-Za-z0-9_]+/gi) || []);
+}
+
+function isLocationRequirementId(id: string): boolean {
+  return /^@?loc[_-]/i.test(id.trim());
+}
+
+function anchorMatchesLocation(anchor: VisualAnchor, location: string): boolean {
+  const hay = foldText(
+    [anchor.asset_id, anchor.file_name, anchor.role, anchor.provenance]
+      .filter(Boolean)
+      .join(" ")
+  );
+  const tokens = nameTokens(location).filter((token) => token.length >= 5);
+  if (tokens.some((token) => hay.includes(token))) return true;
+  const needle = foldText(location.replace(/^@/, ""));
+  return Boolean(needle) && hay.includes(needle);
+}
+
+function isExplicitApprovedAnchorRequired(
+  parsed: PrepareGenerationInput,
+  location: string
+): boolean {
+  const normalized = foldText(location.replace(/^@/, ""));
+  const required = parsed.required_anchor_ids || [];
+  if (
+    required.some((id) => {
+      const idNorm = foldText(id.replace(/^@/, ""));
+      return (
+        idNorm === normalized ||
+        idNorm.includes(normalized) ||
+        (normalized.length >= 5 && normalized.includes(idNorm))
+      );
+    })
+  ) {
+    return true;
+  }
+  const text = `${parsed.user_instruction} ${parsed.scene}`;
+  return /required\s+(an?\s+)?(approved\s+)?(room|location)\s+anchor/i.test(
+    text
+  );
+}
+
+type GenerationReadinessContext = {
+  subjects: string[];
+  identity_authority: SubjectIdentityAuthority[];
+  location_anchors: VisualAnchor[];
+  requested_locations: string[];
+  parsed: PrepareGenerationInput;
+  detailLocks: VisualAnchor[];
+};
+
+function classifyGenerationReadiness(context: GenerationReadinessContext): {
+  blockers: Blocker[];
+  warnings: GenerationWarning[];
+  ready_to_generate: boolean;
+} {
+  const blockers: Blocker[] = [];
+  const warnings: GenerationWarning[] = [];
+
+  // 1. No usable identity authority = HARD BLOCK
+  for (const authority of context.identity_authority) {
+    if (!hasUsableIdentityAuthority(authority, context.detailLocks)) {
+      const unverifiedPrimary = Boolean(authority.primary_identity_anchor);
+      blockers.push({
+        code: unverifiedPrimary
+          ? "UNVERIFIED_IDENTITY_AUTHORITY"
+          : "MISSING_IDENTITY_ANCHOR",
+        subject: authority.subject,
+        message: unverifiedPrimary
+          ? `${authority.subject} identity authority is not VERIFIED_SOURCE and cannot be used.`
+          : `${authority.subject} has no resolvable verified Identity Anchor or Priority 0 reference. No reference was invented.`,
+      });
+      continue;
+    }
+
+    if (
+      /priority\s*0/i.test(context.parsed.user_instruction) &&
+      authority.priority_0_refs.length === 0 &&
+      authority.subject !== "Mambo"
+    ) {
+      blockers.push({
+        code: "MISSING_PRIORITY_0",
+        subject: authority.subject,
+        message: `Priority 0 was requested for ${authority.subject} but no approved Priority 0 reference is resolvable.`,
+      });
+    }
+
+    const facialFromCouple = [
+      authority.primary_identity_anchor,
+      ...authority.priority_0_refs,
+    ].some((anchor) => anchor?.role === "Couple Relationship Anchor");
+    if (facialFromCouple) {
+      blockers.push({
+        code: "SUBJECT_IDENTITY_MIXING",
+        subject: authority.subject,
+        message: `Couple Reference must not replace ${authority.subject}'s individual identity anchors.`,
+      });
+    }
+
+    // 2. Provenance conflict: warning when deterministic authority exists
+    if (authority.provenance_conflict) {
+      if (hasUnresolvedCompetingAuthorities(authority)) {
+        blockers.push({
+          code: "PROVENANCE_CONFLICT",
+          subject: authority.subject,
+          message:
+            "Provenance conflict leaves competing unresolved identity authorities.",
+        });
+      } else {
+        warnings.push({
+          code: "PROVENANCE_CONFLICT",
+          subject: authority.subject,
+          message:
+            "Provenance conflict detected, but canonical identity authority resolves deterministically.",
+        });
+      }
+    }
+
+    // 3. Ambiguity is evaluated AFTER:
+    // - file_id dedupe
+    // - NOT_FOUND/404/BROKEN filtering
+    //
+    // Block only if incompatible active authorities remain.
+    if (authority.ambiguous_identity) {
+      if (hasUnresolvedCompetingAuthorities(authority)) {
+        blockers.push({
+          code: "AMBIGUOUS_IDENTITY_AUTHORITY",
+          subject: authority.subject,
+          message:
+            "Multiple incompatible active identity authorities remain after normalization.",
+        });
+      } else {
+        warnings.push({
+          code: "AMBIGUOUS_IDENTITY_AUTHORITY_RESOLVED",
+          subject: authority.subject,
+          message:
+            "Duplicate or historical identity authority detected but canonical authority resolved deterministically.",
+        });
+      }
+    }
+  }
+
+  // 4. Location / Room Anchor absence is normally a fallback, not blocker.
+  for (const location of context.requested_locations) {
+    const resolved = context.location_anchors.some((anchor) =>
+      anchorMatchesLocation(anchor, location)
+    );
+    if (resolved) continue;
+
+    if (isExplicitApprovedAnchorRequired(context.parsed, location)) {
+      blockers.push({
+        code: "REQUIRED_LOCATION_ANCHOR_MISSING",
+        location,
+        message: `Explicitly required approved anchor for ${location} is unavailable.`,
+      });
+    } else {
+      warnings.push({
+        code: "LOCATION_TEXT_FALLBACK",
+        location,
+        message:
+          `No approved Room/Location Anchor registered for ${location}; ` +
+          "use textual scene definition as fallback.",
+      });
+    }
+  }
+
+  return {
+    blockers,
+    warnings,
+    ready_to_generate: blockers.length === 0,
+  };
+}
+
 function resolveSubjectAuthority(
   subject: string,
   snapshot: GenerationContextSnapshot
@@ -577,21 +919,36 @@ function resolveSubjectAuthority(
     verifiedByFileId.set(physicalId, anchor);
   }
   const dedupedVerified = Array.from(verifiedByFileId.values());
+  const canonical = resolveCanonicalAuthority(dedupedVerified, {
+    subject,
+    master_pack_id: masterPackId,
+    primary_identity_anchor: null,
+    priority_0_refs: [],
+    supporting_anchors: [],
+    body_anchor: null,
+    expression_support: [],
+    hairstyle_grooming_locks: [],
+    tattoo_body_locks: [],
+  });
 
-  // If >1 distinct physical identity, this is AMBIGUOUS (genuine conflict),
-  // not "two registries of the same pack". Let upstream blocker logic handle it.
+  // Prefer a deterministic canonical winner (master pack / PRIORITY_0_PRIMARY)
+  // over map-insertion order, so imperfect duplicates stay diagnostic.
   const primary =
+    canonical?.anchor ||
     dedupedVerified.find((anchor) =>
       [anchor.asset_id, anchor.file_id, stringValue(anchor.file_name)].includes(
         masterPackId
       )
     ) ||
-    dedupedVerified[0] ||
+    [...dedupedVerified].sort(
+      (left, right) => identityRank(right) - identityRank(left)
+    )[0] ||
     identityAnchors[0] ||
     null;
 
   // Report AMBIGUOUS only if multiple DISTINCT physical identities verified
   const hasAmbiguity = dedupedVerified.length > 1;
+  const provenanceConflict = identityAnchors.some(hasProvenanceConflictMarker);
 
   const pickRole = (role: string): VisualAnchor[] =>
     candidates
@@ -613,6 +970,7 @@ function resolveSubjectAuthority(
     hairstyle_grooming_locks: pickRole("Hairstyle/Grooming Lock"),
     tattoo_body_locks: pickRole("Tattoo/Body Lock"),
     ambiguous_identity: hasAmbiguity,
+    provenance_conflict: provenanceConflict,
   };
 }
 
@@ -885,7 +1243,6 @@ export function prepareGenerationPacket(
     ]),
   ]);
 
-  const blockers: Blocker[] = [];
   const seriesPolicy = configValue(
     snapshot.config,
     "SERIES_OUTPUT_POLICY",
@@ -896,68 +1253,22 @@ export function prepareGenerationPacket(
     true
   );
 
-  for (const authority of identity) {
-    const verifiedDetail = detailLocks.filter(
-      (lock) =>
-        lock.subject === authority.subject && isVerifiedFacialAnchor(lock)
-    );
-    const hasVerifiedIdentity =
-      isVerifiedFacialAnchor(authority.primary_identity_anchor) ||
-      authority.priority_0_refs.some(isVerifiedFacialAnchor) ||
-      (authority.subject === "Mambo" &&
-        (verifiedDetail.length > 0 ||
-          authority.supporting_anchors.some(isVerifiedFacialAnchor)));
-    if (!hasVerifiedIdentity) {
-      const unverifiedPrimary = Boolean(authority.primary_identity_anchor);
-      blockers.push({
-        code: unverifiedPrimary
-          ? "UNVERIFIED_IDENTITY_AUTHORITY"
-          : "MISSING_IDENTITY_ANCHOR",
-        message: unverifiedPrimary
-          ? `${authority.subject} identity authority is not VERIFIED_SOURCE and cannot be used.`
-          : `${authority.subject} has no resolvable verified Identity Anchor or Priority 0 reference. No reference was invented.`,
-      });
-    }
-    if (
-      /priority\s*0/i.test(parsed.user_instruction) &&
-      authority.priority_0_refs.length === 0 &&
-      authority.subject !== "Mambo"
-    ) {
-      blockers.push({
-        code: "MISSING_PRIORITY_0",
-        message: `Priority 0 was requested for ${authority.subject} but no approved Priority 0 reference is resolvable.`,
-      });
-    }
-    const facialFromCouple = [
-      authority.primary_identity_anchor,
-      ...authority.priority_0_refs,
-    ].some((anchor) => anchor?.role === "Couple Relationship Anchor");
-    if (facialFromCouple) {
-      blockers.push({
-        code: "SUBJECT_IDENTITY_MIXING",
-        message: `Couple Reference must not replace ${authority.subject}'s individual identity anchors.`,
-      });
-    }
-    const provenanceConflict = [
-      authority.primary_identity_anchor,
-      ...authority.priority_0_refs,
-    ].some(
-      (anchor) =>
-        anchor &&
-        /conflict|needs_review|unknown/i.test(anchor.provenance || "")
-    );
-    if (provenanceConflict) {
-      blockers.push({
-        code: "PROVENANCE_CONFLICT",
-        message: `${authority.subject} identity authority has unresolved provenance and cannot be used until reviewed.`,
-      });
-    }
-  }
+  const requestedLocations = extractRequestedLocations(parsed);
+  const readiness = classifyGenerationReadiness({
+    subjects,
+    identity_authority: identity,
+    location_anchors: location,
+    requested_locations: requestedLocations,
+    parsed,
+    detailLocks,
+  });
+  const blockers: Blocker[] = [...readiness.blockers];
+  const warnings: GenerationWarning[] = [...readiness.warnings];
 
   const requiredIds = extractExplicitIds(
     parsed.user_instruction,
     parsed.required_anchor_ids || []
-  );
+  ).filter((id) => !isLocationRequirementId(id));
   const requiredAnchors: VisualAnchor[] = [];
   for (const id of requiredIds) {
     const located = findLocated(snapshot, id);
@@ -1016,28 +1327,6 @@ export function prepareGenerationPacket(
       blockers.push({
         code: "MISSING_EDIT_BASE",
         message: "EDIT/REGENERATE requires a valid base_capture_id, parent_request_id, or source_result_id.",
-      });
-    }
-  }
-
-  // P0 FIX: ambiguous_identity detection is for future use when we have
-  // a proper de-duplication strategy for multi-registry scenarios. For now,
-  // blockers are generated only by explicit conflict markers in provenance,
-  // not by presence of >1 deduplicated verified packs (which may be mirrors).
-  for (const authority of identity) {
-    const competing = [
-      authority.primary_identity_anchor,
-      ...authority.priority_0_refs,
-    ].filter((anchor): anchor is VisualAnchor => Boolean(anchor));
-    // Only block if we have explicit CONFLICT markers in provenance
-    const uniqueIds = unique(competing.map((anchor) => anchor.asset_id));
-    if (
-      uniqueIds.length > 1 &&
-      competing.some((anchor) => /conflict/i.test(anchor.provenance || ""))
-    ) {
-      blockers.push({
-        code: "AMBIGUOUS_IDENTITY_AUTHORITY",
-        message: `${authority.subject} identity authority has unresolved provenance and cannot be used until reviewed.`,
       });
     }
   }
@@ -1108,6 +1397,7 @@ export function prepareGenerationPacket(
     final_generation_prompt: prompt,
     reference_files: uniqueRefs,
     blockers,
+    warnings,
     guardrails: {
       auto_identity_promotion: false,
       human_approval_required: humanApprovalRequired,

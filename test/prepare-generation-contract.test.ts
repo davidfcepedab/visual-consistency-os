@@ -783,3 +783,255 @@ test("P0 FIX 3 — SalaTV Identity Anchor does NOT satisfy location request (rol
     "Identity Anchor must NOT be selected, role mismatch overrides name match"
   );
 });
+
+function generationInput(
+  overrides: Partial<{
+    project: string;
+    subjects: string[];
+    user_instruction: string;
+    scene: string;
+    required_anchor_ids: string[];
+    trace_id: string;
+  }> = {}
+) {
+  return {
+    project: overrides.project || "TEST-READINESS",
+    subjects: overrides.subjects || ["David"],
+    user_instruction:
+      overrides.user_instruction ||
+      "Create one photorealistic portrait of David.",
+    scene: overrides.scene || "",
+    generator: "CHATGPT_IMAGE",
+    mode: "GENERATE" as const,
+    base_capture_id: "",
+    parent_request_id: "",
+    source_result_id: "",
+    iteration: 1,
+    required_anchor_ids: overrides.required_anchor_ids,
+    trace_id: overrides.trace_id || "trace-readiness",
+  };
+}
+
+test("allows generation when David has deterministic P0 authority plus provenance warning", () => {
+  const packet = prepareGenerationPacket(
+    generationInput({
+      project: "TEST-P0-PROVENANCE-WARNING",
+      user_instruction:
+        "Create one photorealistic portrait of David with Priority 0 identity.",
+      scene: "",
+      trace_id: "trace-p0-provenance-warning",
+    }),
+    {
+      ...authoritySnapshot(),
+      asset_registry: [
+        {
+          asset_id: "AST-DAVID-P0-PRIMARY",
+          subjects: "David",
+          scope: "Identity Anchor",
+          status: "PRIORITY_0_PRIMARY",
+          source_file_id: "FILE-DAVID-CANONICAL",
+          file_name: "DAVID_APPROVED_ANCHOR_01.jpeg",
+          approved_by: "David",
+          provenance: "conflict: duplicate registry row for the same canonical pack",
+        },
+        {
+          asset_id: "AST-DAVID-P0-02",
+          subjects: "David",
+          scope: "Identity Anchor",
+          status: "PRIORITY_0_APPROVED",
+          source_file_id: "FILE-DAVID-REF-02",
+          file_name: "DAVID_APPROVED_ANCHOR_02.jpeg",
+          approved_by: "David",
+        },
+        {
+          asset_id: "AST-DAVID-P0-03",
+          subjects: "David",
+          scope: "Identity Anchor",
+          status: "PRIORITY_0_APPROVED",
+          source_file_id: "FILE-DAVID-REF-03",
+          file_name: "DAVID_APPROVED_ANCHOR_03.jpeg",
+          approved_by: "David",
+        },
+        {
+          asset_id: "AST-DAVID-P0-04",
+          subjects: "David",
+          scope: "Identity Anchor",
+          status: "PRIORITY_0_APPROVED",
+          source_file_id: "FILE-DAVID-REF-04",
+          file_name: "DAVID_APPROVED_ANCHOR_04.jpeg",
+          approved_by: "David",
+        },
+        {
+          asset_id: "AST-DAVID-P0-05",
+          subjects: "David",
+          scope: "Identity Anchor",
+          status: "PRIORITY_0_APPROVED",
+          source_file_id: "FILE-DAVID-REF-05",
+          file_name: "DAVID_APPROVED_ANCHOR_05.jpeg",
+          approved_by: "David",
+        },
+        {
+          asset_id: "AST-DAVID-P0-06",
+          subjects: "David",
+          scope: "Identity Anchor",
+          status: "PRIORITY_0_APPROVED",
+          source_file_id: "FILE-DAVID-REF-06",
+          file_name: "DAVID_APPROVED_ANCHOR_06.jpeg",
+          approved_by: "David",
+        },
+        {
+          asset_id: "AST-DAVID-P0-07",
+          subjects: "David",
+          scope: "Identity Anchor",
+          status: "PRIORITY_0_APPROVED",
+          source_file_id: "FILE-DAVID-REF-07",
+          file_name: "DAVID_APPROVED_ANCHOR_07.jpeg",
+          approved_by: "David",
+        },
+      ],
+      asset_index: [
+        {
+          Asset: "DAVID_APPROVED_ANCHOR_01.jpeg",
+          "Character / Area": "David",
+          Status: "PRIORITY_0_PRIMARY",
+          "Drive Link": "https://drive.google.com/file/d/FILE-DAVID-CANONICAL/view",
+          Notes: "conflict: mirrored asset_index row of the canonical pack",
+        },
+      ],
+    },
+    "trace-p0-provenance-warning"
+  );
+
+  assert.equal(packet.ready_to_generate, true);
+  assert.deepEqual(packet.blockers, []);
+  assert.ok(
+    packet.warnings.some(
+      (warning) =>
+        warning.code === "PROVENANCE_CONFLICT" && warning.subject === "David"
+    )
+  );
+  assert.equal(packet.host_handoff.action, "INVOKE_NATIVE_IMAGE_GENERATOR");
+  assert.equal(packet.host_handoff.same_turn, true);
+});
+
+test("uses TEXT_FALLBACK when optional Room Anchor is missing", () => {
+  const snapshot = authoritySnapshot();
+  snapshot.asset_registry = snapshot.asset_registry.filter(
+    (record) =>
+      !["AST-ROOM-BOGOTA", "AST-ROOM-MIAMI"].includes(String(record.asset_id))
+  );
+  const packet = prepareGenerationPacket(
+    generationInput({
+      project: "TEST-LOCATION-FALLBACK",
+      user_instruction: "Create one photorealistic portrait of David in SalaTV.",
+      scene: "@loc_bog_salatv",
+      trace_id: "trace-location-fallback",
+    }),
+    snapshot,
+    "trace-location-fallback"
+  );
+
+  assert.equal(packet.ready_to_generate, true);
+  assert.equal(packet.location_anchors.length, 0);
+  assert.ok(
+    packet.warnings.some(
+      (warning) =>
+        warning.code === "LOCATION_TEXT_FALLBACK" &&
+        warning.location === "@loc_bog_salatv"
+    )
+  );
+  assert.ok(
+    !packet.blockers.some(
+      (blocker) => blocker.code === "REQUIRED_LOCATION_ANCHOR_MISSING"
+    )
+  );
+  assert.equal(packet.host_handoff.action, "INVOKE_NATIVE_IMAGE_GENERATOR");
+  assert.equal(packet.host_handoff.same_turn, true);
+});
+
+test("blocks genuinely competing unresolved identity authorities", () => {
+  const packet = prepareGenerationPacket(
+    generationInput({
+      project: "TEST-COMPETING-AUTHORITIES",
+      user_instruction: "Create one photorealistic portrait of David.",
+      trace_id: "trace-competing-authorities",
+    }),
+    {
+      ...authoritySnapshot(),
+      config: {
+        ...authoritySnapshot().config,
+        ACTIVE_DAVID_MASTER_PACK_ID: "PACK-UNMATCHED",
+      },
+      asset_registry: [
+        {
+          asset_id: "AST-DAVID-PACK-A",
+          subjects: "David",
+          scope: "Identity Anchor",
+          status: "PRIORITY_0_PRIMARY",
+          source_file_id: "FILE-DAVID-PACK-A",
+          file_name: "DAVID_PACK_A_PRIMARY.jpeg",
+          approved_by: "David",
+          notes: "Priority 0 identity pack A",
+        },
+        {
+          asset_id: "AST-DAVID-PACK-B",
+          subjects: "David",
+          scope: "Identity Anchor",
+          status: "PRIORITY_0_PRIMARY",
+          source_file_id: "FILE-DAVID-PACK-B",
+          file_name: "DAVID_PACK_B_PRIMARY.jpeg",
+          approved_by: "David",
+          notes: "Priority 0 identity pack B",
+        },
+      ],
+      asset_index: [],
+    },
+    "trace-competing-authorities"
+  );
+
+  assert.equal(packet.ready_to_generate, false);
+  assert.ok(
+    packet.blockers.some(
+      (blocker) =>
+        blocker.code === "AMBIGUOUS_IDENTITY_AUTHORITY" &&
+        blocker.subject === "David"
+    )
+  );
+  assert.equal(packet.host_handoff.action, "DO_NOT_INVOKE_GENERATOR");
+  assert.equal(packet.host_handoff.same_turn, false);
+});
+
+test("blocks when an explicitly required approved Room Anchor is missing", () => {
+  const snapshot = authoritySnapshot();
+  snapshot.asset_registry = snapshot.asset_registry.filter(
+    (record) =>
+      !["AST-ROOM-BOGOTA", "AST-ROOM-MIAMI"].includes(String(record.asset_id))
+  );
+  const packet = prepareGenerationPacket(
+    generationInput({
+      project: "TEST-REQUIRED-ROOM-ANCHOR",
+      user_instruction:
+        "Create one photorealistic portrait of David using the required approved Room Anchor.",
+      scene: "@loc_bog_salatv",
+      required_anchor_ids: ["@loc_bog_salatv"],
+      trace_id: "trace-required-room-anchor",
+    }),
+    snapshot,
+    "trace-required-room-anchor"
+  );
+
+  assert.equal(packet.ready_to_generate, false);
+  assert.ok(
+    packet.blockers.some(
+      (blocker) =>
+        blocker.code === "REQUIRED_LOCATION_ANCHOR_MISSING" &&
+        blocker.location === "@loc_bog_salatv"
+    )
+  );
+  assert.ok(
+    !packet.blockers.some(
+      (blocker) => blocker.code === "MISSING_REQUIRED_REFERENCE"
+    )
+  );
+  assert.equal(packet.host_handoff.action, "DO_NOT_INVOKE_GENERATOR");
+});
