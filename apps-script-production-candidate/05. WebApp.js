@@ -107,6 +107,11 @@ function doPost(e) {
           promoteAsset_(payload)
         );
 
+      case 'update_asset_authority':
+        return jsonResponse_(
+          updateAssetIndexAuthority_(payload)
+        );
+
       case 'run_pipeline':
         return jsonResponse_({
           ok: true,
