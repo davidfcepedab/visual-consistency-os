@@ -301,6 +301,11 @@ function isCoupleRecord(record: UnknownRecord): boolean {
 function classifyRole(record: UnknownRecord): string {
   const blob = blobFor(record);
   if (/couple|relationship/.test(blob)) return "Couple Relationship Anchor";
+  // Identity must win over room/location keywords in notes or folders.
+  // Production identity masters mention "location" without being Room Anchors.
+  if (/identity|priority 0|priority_0|\bp0\b|master pack|master_pack/.test(blob)) {
+    return "Identity Anchor";
+  }
   if (/room|location/.test(blob)) return "Room Anchor";
   if (/composition/.test(blob)) return "Composition Anchor";
   if (/lighting|light/.test(blob)) return "Lighting Anchor";
@@ -312,9 +317,6 @@ function classifyRole(record: UnknownRecord): string {
   if (/expression/.test(blob)) return "Expression Support";
   if (/body anchor/.test(blob)) return "Body Anchor";
   if (/detail lock/.test(blob)) return "Detail Lock";
-  if (/identity|priority 0|priority_0|\bp0\b|master pack|master_pack/.test(blob)) {
-    return "Identity Anchor";
-  }
   return field(record, "scope", "anchor_type", "role") || "Support";
 }
 
@@ -626,7 +628,12 @@ function resolveCanonicalAuthority(
   const ranked = [...deduped].sort(
     (left, right) => identityRank(right) - identityRank(left)
   );
-  return { anchor: ranked[0], deterministic: false };
+  // Multiple verified refs of the same ranked pack (profiles, supporting P0
+  // files) are one authority. Only competing PRIORITY_0_PRIMARY packs are unsafe.
+  if (primaryIds.length > 1) {
+    return { anchor: ranked[0], deterministic: false };
+  }
+  return { anchor: ranked[0], deterministic: true };
 }
 
 function containsIncompatibleActiveAuthorities(deduped: VisualAnchor[]): boolean {
@@ -638,9 +645,7 @@ function containsIncompatibleActiveAuthorities(deduped: VisualAnchor[]): boolean
       )
       .map((anchor) => anchor.file_id || anchor.asset_id)
   );
-  if (primaryIds.length > 1) return true;
-  if (primaryIds.length === 0) return true;
-  return false;
+  return primaryIds.length > 1;
 }
 
 function hasUsableIdentityAuthority(
