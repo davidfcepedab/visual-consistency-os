@@ -55,6 +55,9 @@ export type SubjectIdentityAuthority = {
   expression_support: VisualAnchor[];
   hairstyle_grooming_locks: VisualAnchor[];
   tattoo_body_locks: VisualAnchor[];
+  // P0 FIX: true if multiple DISTINCT physical identity packs are verified
+  // for this subject (genuine conflict, not mirroring the same pack).
+  ambiguous_identity?: boolean;
 };
 
 export type Blocker = {
@@ -525,7 +528,18 @@ function resolveSubjectAuthority(
   const candidates = collectRecords(snapshot)
     .filter(({ record }) => isUsableStatus(record) && !isRejectedStatus(record))
     .filter(({ record }) => !isGeneratedUnpromoted(record))
-    .filter(({ record }) => matchesSubject(record, subject));
+    .filter(({ record }) => matchesSubject(record, subject))
+    // P0 FIX: exclude records marked as physically unavailable/404 in Drive.
+    // If Apps Script validates availability and marks `physical_status: "NOT_FOUND"`,
+    // they are excluded here. Null/undefined physical_status = no validation info,
+    // treated as available (backward-compatible).
+    .filter(({ record }) => {
+      const status = field(record, "physical_status", "drive_status");
+      if (!status) return true; // No validation data, allow
+      return !["NOT_FOUND", "404", "BROKEN", "INACCESSIBLE"].includes(
+        String(status).toUpperCase()
+      );
+    });
 
   const identityRecords = candidates.filter(
     ({ record }) => classifyRole(record) === "Identity Anchor"
@@ -547,15 +561,37 @@ function resolveSubjectAuthority(
     ({ record, source }) => toAnchor(record, source, subject)
   );
   const verifiedIdentity = identityAnchors.filter(isVerifiedFacialAnchor);
+
+  // AMBIGUITY DETECTION: if multiple verified anchors exist with DIFFERENT
+  // physical identities (file_id/asset_id), that's genuine conflict, not
+  // mirroring. Same pack can appear in multiple registries (asset_registry +
+  // asset_index) pointing to the same file — that's OK and canonical.
+  // Different packs (different file_ids) = ambiguous.
+  const verifiedByFileId = new Map<string, VisualAnchor>();
+  for (const anchor of verifiedIdentity) {
+    const physicalId = anchor.file_id || anchor.asset_id || "UNKNOWN";
+    if (verifiedByFileId.has(physicalId)) {
+      // Same file, different registry entry — dedup, keep first
+      continue;
+    }
+    verifiedByFileId.set(physicalId, anchor);
+  }
+  const dedupedVerified = Array.from(verifiedByFileId.values());
+
+  // If >1 distinct physical identity, this is AMBIGUOUS (genuine conflict),
+  // not "two registries of the same pack". Let upstream blocker logic handle it.
   const primary =
-    verifiedIdentity.find((anchor) =>
+    dedupedVerified.find((anchor) =>
       [anchor.asset_id, anchor.file_id, stringValue(anchor.file_name)].includes(
         masterPackId
       )
     ) ||
-    verifiedIdentity[0] ||
+    dedupedVerified[0] ||
     identityAnchors[0] ||
     null;
+
+  // Report AMBIGUOUS only if multiple DISTINCT physical identities verified
+  const hasAmbiguity = dedupedVerified.length > 1;
 
   const pickRole = (role: string): VisualAnchor[] =>
     candidates
@@ -576,6 +612,7 @@ function resolveSubjectAuthority(
     expression_support: pickRole("Expression Support"),
     hairstyle_grooming_locks: pickRole("Hairstyle/Grooming Lock"),
     tattoo_body_locks: pickRole("Tattoo/Body Lock"),
+    ambiguous_identity: hasAmbiguity,
   };
 }
 
@@ -592,9 +629,17 @@ function sceneAnchors(
 ): VisualAnchor[] {
   const haystack = sceneHaystack(parsed);
   const project = foldText(parsed.project.trim());
+  // P0 FIX: scope matching. Asset role MUST match the requested dimension.
+  // Identity Anchors CANNOT satisfy location/room/environment requests,
+  // even if the name contains "SalaTV" or matches the scene text.
+  // This enforces the principle: asset scope must match authority dimension.
+  const forbiddenRoles = ["Identity Anchor", "Couple Relationship Anchor"];
   return collectRecords(snapshot)
     .filter(({ record }) => isUsableStatus(record) && !isRejectedStatus(record))
     .filter(({ record }) => classifyRole(record) === role)
+    // ENFORCE role matching first: if requesting Room Anchor, reject everything else.
+    // Do NOT allow name-match to override role classification.
+    .filter(({ record }) => !forbiddenRoles.includes(classifyRole(record)))
     .filter(({ record }) => {
       const recordProject = foldText(field(record, "project"));
       if (recordProject && project && recordProject === project) return true;
@@ -975,11 +1020,16 @@ export function prepareGenerationPacket(
     }
   }
 
+  // P0 FIX: ambiguous_identity detection is for future use when we have
+  // a proper de-duplication strategy for multi-registry scenarios. For now,
+  // blockers are generated only by explicit conflict markers in provenance,
+  // not by presence of >1 deduplicated verified packs (which may be mirrors).
   for (const authority of identity) {
     const competing = [
       authority.primary_identity_anchor,
       ...authority.priority_0_refs,
     ].filter((anchor): anchor is VisualAnchor => Boolean(anchor));
+    // Only block if we have explicit CONFLICT markers in provenance
     const uniqueIds = unique(competing.map((anchor) => anchor.asset_id));
     if (
       uniqueIds.length > 1 &&
@@ -987,7 +1037,7 @@ export function prepareGenerationPacket(
     ) {
       blockers.push({
         code: "AMBIGUOUS_IDENTITY_AUTHORITY",
-        message: `${authority.subject} has conflicting identity authorities and cannot be resolved automatically.`,
+        message: `${authority.subject} identity authority has unresolved provenance and cannot be used until reviewed.`,
       });
     }
   }

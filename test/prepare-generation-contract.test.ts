@@ -635,3 +635,151 @@ test("P2 — scene anchors are filtered to the mentioned location", () => {
   );
   assert.equal(generic.location_anchors.length, 0);
 });
+
+test("P0 FIX 1 — David duplicate registry (same pack in asset_registry + asset_index) is NOT ambiguous", () => {
+  const packet = prepareGenerationPacket(
+    {
+      project: "TEST-CANONICAL-PACK",
+      subjects: ["David"],
+      user_instruction: "Create one photorealistic portrait of David.",
+      scene: "",
+      generator: "CHATGPT_IMAGE",
+      mode: "GENERATE",
+      base_capture_id: "",
+      parent_request_id: "",
+      source_result_id: "",
+      iteration: 1,
+      trace_id: "trace-p0-canonical-mirror",
+    },
+    {
+      ...authoritySnapshot(),
+      asset_registry: [
+        {
+          asset_id: "DAVID-MIRROR-1",
+          subjects: "David",
+          scope: "Identity Anchor",
+          status: "PRIORITY_0_PRIMARY",
+          source_file_id: "FILE-DAVID-CANONICAL",
+          file_name: "DAVID_APPROVED_ANCHOR_CANONICAL.jpeg",
+          approved_by: "David",
+        },
+      ],
+      asset_index: [
+        {
+          Asset: "DAVID_APPROVED_ANCHOR_CANONICAL.jpeg",
+          "Character / Area": "David",
+          Status: "PRIORITY_0_PRIMARY",
+          "Drive Link": "https://drive.google.com/file/d/FILE-DAVID-CANONICAL/view",
+          Notes: "Mirror of asset_registry entry",
+        },
+      ],
+    },
+    "trace-p0-canonical-mirror"
+  );
+  assert.equal(packet.ready_to_generate, true);
+  assert.ok(
+    !packet.blockers.some((b) => b.code === "AMBIGUOUS_IDENTITY_AUTHORITY"),
+    "Mirroring same canonical pack should NOT be ambiguous"
+  );
+});
+
+test("P0 FIX 2 — Juan approved + Drive 404 excluded, does not block if alternative exists", () => {
+  const packet = prepareGenerationPacket(
+    {
+      project: "TEST-404-EXCLUSION",
+      subjects: ["Juan"],
+      user_instruction: "Create one photorealistic portrait of Juan.",
+      scene: "",
+      generator: "CHATGPT_IMAGE",
+      mode: "GENERATE",
+      base_capture_id: "",
+      parent_request_id: "",
+      source_result_id: "",
+      iteration: 1,
+      trace_id: "trace-p0-404",
+    },
+    {
+      ...authoritySnapshot(),
+      asset_index: [
+        {
+          Asset: "JUAN_BROKEN_404.png",
+          "Character / Area": "Juan",
+          Status: "ACTIVE",
+          "Drive Link": "https://drive.google.com/file/d/FILE-BROKEN/view",
+          physical_status: "NOT_FOUND",
+          Notes: "Marked as 404",
+        },
+        {
+          Asset: "JUAN_APPROVED_VALID.jpeg",
+          "Character / Area": "Juan",
+          Status: "PRIORITY_0_APPROVED",
+          "Drive Link": "https://drive.google.com/file/d/FILE-JUAN-VALID/view",
+          Notes: "Real approved file",
+        },
+      ],
+      asset_registry: [],
+    },
+    "trace-p0-404"
+  );
+  const juan = packet.identity_authority.find((a) => a.subject === "Juan");
+  assert.ok(juan?.primary_identity_anchor !== null);
+  assert.notEqual(juan?.primary_identity_anchor?.asset_id, "JUAN_BROKEN_404.png");
+});
+
+test("P0 FIX 3 — SalaTV Identity Anchor does NOT satisfy location request (role enforcement)", () => {
+  // REGRESSION: scene matching filters by role, NOT just name matching.
+  // An Identity Anchor with "SalaTV" in the filename should NOT be returned
+  // when requesting Room Anchors, even if its name matches the scene keyword.
+  const minimalSnapshot: GenerationContextSnapshot = {
+    revision: "test-rev",
+    config: { ACTIVE_DAVID_MASTER_PACK_ID: "PACK-DAVID" },
+    asset_registry: [
+      {
+        asset_id: "AST-DAVID-IDENTITY",
+        file_name: "DAVID_IDENTITY_PHOTO_SALATV.jpeg",
+        subjects: "David",
+        scope: "Identity Anchor",
+        status: "PRIORITY_0_PRIMARY",
+        approved_by: "David",
+        notes: "Priority 0 identity anchor, SalaTV scene compatible",
+      },
+      {
+        asset_id: "AST-ROOM-SALATV",
+        file_name: "SALATV_ROOM_ANCHOR.jpg",
+        scope: "Room Anchor",
+        status: "APPROVED",
+        notes: "SalaTV living room environment",
+      },
+    ],
+    asset_index: [],
+    captures: [],
+    requests: [],
+    result_memory: [],
+  };
+  const packet = prepareGenerationPacket(
+    {
+      project: "TEST-ROLE",
+      subjects: ["David"],
+      user_instruction: "David in the SalaTV living room.",
+      scene: "@loc_bog_salatv",
+      generator: "CHATGPT_IMAGE",
+      mode: "GENERATE",
+      base_capture_id: "",
+      parent_request_id: "",
+      source_result_id: "",
+      iteration: 1,
+      trace_id: "trace-p0-role",
+    },
+    minimalSnapshot,
+    "trace-p0-role"
+  );
+  // Verify: Room Anchor selected, Identity Anchor rejected
+  assert.ok(
+    packet.location_anchors.some((a) => a.asset_id === "AST-ROOM-SALATV"),
+    "Room Anchor should be selected"
+  );
+  assert.ok(
+    !packet.location_anchors.some((a) => a.asset_id === "AST-DAVID-IDENTITY"),
+    "Identity Anchor must NOT be selected, role mismatch overrides name match"
+  );
+});
