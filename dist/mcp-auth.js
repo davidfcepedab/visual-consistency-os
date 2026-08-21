@@ -46,7 +46,9 @@ export function createOAuthResourceMetadata(config) {
 export function createOAuthAuthorizationServerMetadata(config) {
     return {
         issuer: config.issuer,
-        authorization_endpoint: new URL("authorize", config.issuer).href,
+        // Route authorization through the MCP origin so Auth0-specific audience
+        // normalization is applied before forwarding the request.
+        authorization_endpoint: new URL("/authorize", config.publicUrl).href,
         token_endpoint: new URL("oauth/token", config.issuer).href,
         registration_endpoint: new URL("oidc/register", config.issuer).href,
         response_types_supported: ["code"],

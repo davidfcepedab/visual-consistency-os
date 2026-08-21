@@ -67,7 +67,7 @@ app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
     ok: true,
     service: "visual-identity-os-mcp",
-    version: "1.5.2",
+    version: "1.5.3",
   });
 });
 

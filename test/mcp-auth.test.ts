@@ -72,7 +72,7 @@ test("protected resource metadata advertises Auth0-compatible OAuth", () => {
 test("authorization server compatibility metadata points to Auth0", () => {
   assert.deepEqual(createOAuthAuthorizationServerMetadata(oauth), {
     issuer: "https://issuer.example/",
-    authorization_endpoint: "https://issuer.example/authorize",
+    authorization_endpoint: "https://visual.example/authorize",
     token_endpoint: "https://issuer.example/oauth/token",
     registration_endpoint: "https://issuer.example/oidc/register",
     response_types_supported: ["code"],
