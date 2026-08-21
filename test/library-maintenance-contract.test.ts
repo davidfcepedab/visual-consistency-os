@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   createLibraryMaintenanceHandlers,
   planLibraryReconciliation,
+  readFullLibrarySnapshot,
   type LibraryMaintenanceSnapshot,
 } from "../src/library-maintenance-tools.js";
 
@@ -29,6 +30,26 @@ const snapshot: LibraryMaintenanceSnapshot = {
     { file_id: "FILE-MISSING", state: "NOT_FOUND", source: "ASSET_INDEX" },
   ],
 };
+
+function completeSnapshotResponse(value: LibraryMaintenanceSnapshot) {
+  return {
+    ok: true,
+    scan_id: "scan-fixture",
+    revision: value.revision,
+    files: value.files,
+    complete: true,
+    truncated: false,
+    coverage: "COMPLETE",
+    pages_scanned: 1,
+    folders_scanned: 3,
+    files_scanned: value.files.length,
+    captures: value.captures,
+    result_memory: value.result_memory,
+    asset_registry: value.asset_registry,
+    asset_index: value.asset_index,
+    reference_checks: value.reference_checks,
+  };
+}
 
 test("library reconciliation covers actionable categories without writing", () => {
   const findings = planLibraryReconciliation(snapshot);
@@ -68,7 +89,7 @@ test("library inventory filters scope and paginates without duplicates", async (
   let backendCalls = 0;
   const handlers = createLibraryMaintenanceHandlers(async () => {
     backendCalls += 1;
-    return { ok: true, snapshot };
+    return completeSnapshotResponse(snapshot);
   });
   const ids: string[] = [];
   let cursor: string | undefined;
@@ -83,14 +104,14 @@ test("library inventory filters scope and paginates without duplicates", async (
 
   assert.deepEqual(ids, ["FILE-DUP-A", "FILE-DUP-B", "FILE-REVIEW"]);
   assert.equal(ids.length, new Set(ids).size);
-  assert.equal(backendCalls, 1, "pagination should reuse one bounded snapshot");
+  assert.equal(backendCalls, 1, "pagination should reuse one complete snapshot");
 });
 
 test("reconciliation tool only accepts dry_run true", async () => {
   let backendCalls = 0;
   const handlers = createLibraryMaintenanceHandlers(async () => {
     backendCalls += 1;
-    return { ok: true, snapshot };
+    return completeSnapshotResponse(snapshot);
   });
   const rejected = await handlers.planLibraryReconciliation({ dry_run: false, limit: 50, trace_id: "trace-rejected-write" });
   assert.equal(rejected.ok, false);
@@ -103,6 +124,40 @@ test("reconciliation tool only accepts dry_run true", async () => {
     assert.equal(accepted.write_count, 0);
     assert.ok(accepted.items.length > 0);
   }
+});
+
+test("full traversal has neither duplicates nor omissions across backend pages", async () => {
+  const calls: Record<string, string>[] = [];
+  const result = await readFullLibrarySnapshot(async (_action, params) => {
+    calls.push(params);
+    if (!params.cursor) {
+      return {
+        ok: true,
+        scan_id: "scan-multipage",
+        revision: snapshot.revision,
+        files: snapshot.files.slice(0, 2),
+        complete: false,
+        next_cursor: "page-2",
+        folders_scanned: 1,
+        files_scanned: 2,
+      };
+    }
+    return {
+      ...completeSnapshotResponse(snapshot),
+      scan_id: "scan-multipage",
+      files: [snapshot.files[1], ...snapshot.files.slice(2)],
+      pages_scanned: 2,
+    };
+  }, "trace-multipage");
+
+  assert.deepEqual(
+    result.files.map((file) => file.file_id),
+    ["FILE-DUP-A", "FILE-DUP-B", "FILE-INBOX", "FILE-REVIEW"]
+  );
+  assert.equal(new Set(result.files.map((file) => file.file_id)).size, 4);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].cursor, "page-2");
+  assert.equal(result.scan?.coverage, "COMPLETE");
 });
 
 test("library protocol errors are safe and do not leak backend data", async () => {

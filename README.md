@@ -2,7 +2,7 @@
 
 Remote MCP server for the Visual Identity OS control plane.
 
-Current candidate version: `1.4.1` with 16 registered tools and two focused
+Current candidate version: `1.5.0` with 17 registered tools and two focused
 agent skills.
 
 This branch is the controlled integration line based on the source that
@@ -50,11 +50,15 @@ and `request_id` are control-plane outputs, not the image. When
 `ready_to_generate=true`, the host must invoke its native image generator in
 the same turn and return the bitmap. `visual_create_request` does not generate.
 
-The inventory is paginated by a revision-bound cursor. Reconciliation only
-accepts `dry_run=true`, reports `write_count: 0`, and never moves, renames,
-deletes, verifies, or promotes an asset. A bounded snapshot is reused for five
-minutes during pagination. The response reports `scan.truncated`; a truncated
-scan is coverage evidence, not proof that the entire library was inspected.
+Version 1.5.0 adds `visual_apply_library_reconciliation`. Drive inventory now
+traverses the configured Inbox and organized-library roots to completion using
+a continuation cursor. Sheets are revision-checked at the beginning and end;
+partial traversal is an error, never labeled complete. Automatic application
+is limited to registering an exact Drive file as `CANDIDATE / NEEDS_REVIEW` or
+appending provenance to an exact current human APPROVED/REJECTED decision. It
+requires dry-run, idempotency, expected revision, actor, reason and source
+evidence, and never moves, renames, deletes, verifies identity or promotes an
+asset.
 
 ## Agent skills
 
@@ -75,8 +79,10 @@ The new tools use these Apps Script GET actions:
   reviews, result memory, and assets
 - `batches_catalog`: versioned batch catalog including pending and terminal
   states
-- `library_snapshot`: bounded Drive and Sheets snapshot used only for
-  deterministic inventory and reconciliation planning
+- `library_snapshot`: exhaustive cursor-based Drive and revision-stable Sheets
+  snapshot used for deterministic inventory and reconciliation planning
+- `apply_library_reconciliation`: allowlisted candidate registration or
+  audit-only consolidation with optimistic concurrency and idempotency
 
 Fixture-only reference implementations live in
 `apps-script-isolated/`. They are exercised end-to-end over local HTTP but are
@@ -102,8 +108,8 @@ hashes, and the remaining review gate are in
   only for controlled smoke tests and rollback access.
 - Protected-resource metadata is exposed at both standard discovery paths.
 - Mutation contracts require dry-run, idempotency, optimistic concurrency,
-  evidence, actor, reason, trace ID, and audit data. No mutation tools are
-  implemented in this block.
+  evidence, actor, reason, trace ID, audit data and readback. Only the bounded
+  library reconciliation mutation above is implemented.
 - Physical deletion is not part of the contract.
 
 See [docs/SAFE_REMEDIATION_CONTRACT.md](docs/SAFE_REMEDIATION_CONTRACT.md).

@@ -103,21 +103,33 @@ function scoreImageWithGemini_(file, request) {
   return normalizeDecision_(score);
 }
 
-function normalizeDecision_(score) {
+// Pure decision function, exported for direct unit testing. Hard rejection
+// is a recommendation only — final APPROVE/REJECT stays human-controlled
+// downstream (see applyHumanDecision_ in 06. Workflow.js).
+function computeAutoDecision_(score) {
   const id = Number(score.identity_fidelity);
   const overall = Number(score.overall_score);
   const anatomy = Number(score.anatomy);
+  const rejectThreshold = STATIC_CONFIG.DEFAULTS.AUTO_REJECT_THRESHOLD;
 
-  if (id <= STATIC_CONFIG.DEFAULTS.AUTO_REJECT_MAX_IDENTITY || anatomy < 3.5) {
-    score.auto_decision = 'REJECT';
-  } else if (
+  // Documented scale: 1.0-2.9 Rejected, 3.0-3.9 Diagnostic. Hard rejection
+  // must never fire on a Diagnostic-band score (>= 3.0).
+  if (id < rejectThreshold || overall < rejectThreshold || anatomy < rejectThreshold) {
+    return 'REJECT';
+  }
+
+  if (
     id >= STATIC_CONFIG.DEFAULTS.AUTO_APPROVE_MIN_IDENTITY &&
     overall >= STATIC_CONFIG.DEFAULTS.AUTO_APPROVE_MIN_OVERALL &&
     anatomy >= 4.2
   ) {
-    score.auto_decision = 'APPROVE';
-  } else {
-    score.auto_decision = 'ADJUST';
+    return 'APPROVE';
   }
+
+  return 'ADJUST';
+}
+
+function normalizeDecision_(score) {
+  score.auto_decision = computeAutoDecision_(score);
   return score;
 }

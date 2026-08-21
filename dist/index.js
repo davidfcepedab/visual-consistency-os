@@ -8,6 +8,7 @@ import { createAppsScriptReadClient } from "./apps-script-read-client.js";
 import { assertRuntimeSecurity } from "./contracts.js";
 import { DetectOrphanCapturesInputSchema, GetCaptureInputSchema, ListBatchesByProjectInputSchema, createSafeReadHandlers, } from "./safe-read-tools.js";
 import { ListLibraryInventoryInputSchema, PlanLibraryReconciliationInputSchema, createLibraryMaintenanceHandlers, } from "./library-maintenance-tools.js";
+import { ApplyLibraryReconciliationInputSchema, createLibraryMutationHandlers, } from "./library-mutation-tools.js";
 import { PrepareGenerationInputSchema, createPrepareGenerationHandlers, } from "./prepare-generation-tools.js";
 import { createBearerAuthenticator, createOAuthResourceMetadata, oauthResourceMetadataUrl, readOAuthConfiguration, } from "./mcp-auth.js";
 const PORT = Number(process.env.PORT || 8080);
@@ -35,7 +36,7 @@ app.get("/health", (_req, res) => {
     res.status(200).json({
         ok: true,
         service: "visual-identity-os-mcp",
-        version: "1.4.1",
+        version: "1.5.0",
     });
 });
 if (OAUTH) {
@@ -115,10 +116,14 @@ app.all("/mcp", async (req, res) => {
 function createServer() {
     const server = new McpServer({
         name: "visual-identity-os",
-        version: "1.4.1",
+        version: "1.5.0",
     });
     const safeReadHandlers = createSafeReadHandlers(appsScriptSafeReadGet);
     const libraryMaintenanceHandlers = createLibraryMaintenanceHandlers(appsScriptSafeReadGet);
+    const libraryMutationHandlers = createLibraryMutationHandlers({
+        read: appsScriptSafeReadGet,
+        write: appsScriptPost,
+    });
     const prepareGenerationHandlers = createPrepareGenerationHandlers({
         read: appsScriptSafeReadGet,
         write: appsScriptPost,
@@ -184,6 +189,17 @@ function createServer() {
             openWorldHint: false,
         },
     }, async (input) => toolResult(await libraryMaintenanceHandlers.planLibraryReconciliation(input)));
+    server.registerTool("visual_apply_library_reconciliation", {
+        title: "Apply visual library reconciliation",
+        description: "Applies only deterministic, non-authoritative library reconciliation: registering an exact Drive file as a CANDIDATE/NEEDS_REVIEW row, or consolidating a file once an exact existing human APPROVE/REJECT decision already proves the destination. dry_run defaults to true and performs zero writes. A real write requires idempotency_key, expected_revision, reason, updated_by, and source_evidence, is a no-op on idempotency_key replay, appends audit provenance to the existing ASSET_REGISTRY row, and verifies by readback. It never verifies identity, face, tattoo, ring, Detail Lock, Identity Master, or Publication Ready, and never overwrites a human decision, deletes anything, or creates a new folder, sheet, or spreadsheet.",
+        inputSchema: ApplyLibraryReconciliationInputSchema.shape,
+        annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+        },
+    }, async (input) => toolResult(await libraryMutationHandlers.applyLibraryReconciliation(input)));
     server.registerTool("visual_prepare_generation", {
         title: "Prepare native image generation",
         description: "Resolves visual identity authority and returns a generation packet for the HOST native image generator. This MCP never renders images and must not be interpreted as image generation being unavailable. READY_TO_GENERATE and request_id are control-plane outputs, not the image. If ready_to_generate is true, the host MUST invoke its native image generator in the same turn using final_generation_prompt and identity_authority references, then return the bitmap. Do not stop after creating the request. ready_to_generate=false only when mandatory visual context is missing.",

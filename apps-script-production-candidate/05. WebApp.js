@@ -39,7 +39,10 @@ function doGet(e) {
 
       case 'library_snapshot':
         return jsonResponse_(
-          getLibraryMaintenanceSnapshotSafe_()
+          getLibraryMaintenanceSnapshotPageSafe_(
+            e?.parameter?.cursor || null,
+            e?.parameter?.page_size || null
+          )
         );
 
       case 'generation_context':
@@ -77,6 +80,16 @@ function doPost(e) {
     ).trim();
 
     switch (action) {
+      // Read-only route carried over POST because an exhaustive Drive cursor
+      // can exceed practical GET query-string limits. It performs no write.
+      case 'library_snapshot':
+        return jsonResponse_(
+          getLibraryMaintenanceSnapshotPageSafe_(
+            payload.cursor || null,
+            payload.page_size || null
+          )
+        );
+
       case 'create_session':
         return jsonResponse_(
           createVisualSession_(payload)
@@ -112,6 +125,11 @@ function doPost(e) {
           updateAssetIndexAuthority_(payload)
         );
 
+      case 'apply_library_reconciliation':
+        return jsonResponse_(
+          applyLibraryReconciliation_(payload)
+        );
+
       case 'run_pipeline':
         return jsonResponse_({
           ok: true,
@@ -121,13 +139,16 @@ function doPost(e) {
       default:
         return jsonResponse_({
           ok: false,
-          error: `Unsupported action: ${action}`,
+          error: { code: 'INVALID_ARGUMENT', message: `Unsupported action: ${action}` },
         });
     }
   } catch (err) {
     return jsonResponse_({
       ok: false,
-      error: String(err.message || err),
+      error: {
+        code: (err && err.code) || 'BACKEND_ERROR',
+        message: String((err && err.message) || err),
+      },
     });
   }
 }

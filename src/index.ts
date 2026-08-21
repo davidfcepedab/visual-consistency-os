@@ -18,6 +18,10 @@ import {
   createLibraryMaintenanceHandlers,
 } from "./library-maintenance-tools.js";
 import {
+  ApplyLibraryReconciliationInputSchema,
+  createLibraryMutationHandlers,
+} from "./library-mutation-tools.js";
+import {
   PrepareGenerationInputSchema,
   createPrepareGenerationHandlers,
 } from "./prepare-generation-tools.js";
@@ -60,7 +64,7 @@ app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
     ok: true,
     service: "visual-identity-os-mcp",
-    version: "1.4.2",
+    version: "1.5.0",
   });
 });
 
@@ -165,12 +169,16 @@ app.all("/mcp", async (req: Request, res: Response) => {
 function createServer(): McpServer {
   const server = new McpServer({
     name: "visual-identity-os",
-    version: "1.4.2",
+    version: "1.5.0",
   });
   const safeReadHandlers = createSafeReadHandlers(appsScriptSafeReadGet);
   const libraryMaintenanceHandlers = createLibraryMaintenanceHandlers(
     appsScriptSafeReadGet
   );
+  const libraryMutationHandlers = createLibraryMutationHandlers({
+    read: appsScriptSafeReadGet,
+    write: appsScriptPost,
+  });
   const prepareGenerationHandlers = createPrepareGenerationHandlers({
     read: appsScriptSafeReadGet,
     write: appsScriptPost,
@@ -296,6 +304,26 @@ function createServer(): McpServer {
     async (input) =>
       toolResult(
         await libraryMaintenanceHandlers.planLibraryReconciliation(input)
+      )
+  );
+
+  server.registerTool(
+    "visual_apply_library_reconciliation",
+    {
+      title: "Apply visual library reconciliation",
+      description:
+        "Applies only deterministic, non-authoritative library reconciliation: registering an exact Drive file as a CANDIDATE/NEEDS_REVIEW row, or consolidating a file once an exact existing human APPROVE/REJECT decision already proves the destination. dry_run defaults to true and performs zero writes. A real write requires idempotency_key, expected_revision, reason, updated_by, and source_evidence, is a no-op on idempotency_key replay, appends audit provenance to the existing ASSET_REGISTRY row, and verifies by readback. It never verifies identity, face, tattoo, ring, Detail Lock, Identity Master, or Publication Ready, and never overwrites a human decision, deletes anything, or creates a new folder, sheet, or spreadsheet.",
+      inputSchema: ApplyLibraryReconciliationInputSchema.shape,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      toolResult(
+        await libraryMutationHandlers.applyLibraryReconciliation(input)
       )
   );
 

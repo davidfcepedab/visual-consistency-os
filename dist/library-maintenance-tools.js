@@ -15,20 +15,20 @@ export const PlanLibraryReconciliationInputSchema = z.object({
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function stringValue(value) {
+export function stringValue(value) {
     return typeof value === "string" ? value.trim() : "";
 }
 function normalizeStatus(value) {
     return stringValue(value).toUpperCase();
 }
-function driveIdFrom(value) {
+export function driveIdFrom(value) {
     const text = stringValue(value);
     if (!text)
         return "";
     const match = text.match(/\/d\/([A-Za-z0-9_-]+)/) ?? text.match(/[?&]id=([A-Za-z0-9_-]+)/);
     return match?.[1] || (/^[A-Za-z0-9_-]+$/.test(text) ? text : "");
 }
-function recordDriveId(record) {
+export function recordDriveId(record) {
     return (driveIdFrom(record.source_file_id) ||
         driveIdFrom(record.file_id) ||
         driveIdFrom(record.drive_url) ||
@@ -167,15 +167,6 @@ export function planLibraryReconciliation(snapshot) {
     }
     return [...unique.values()].sort((left, right) => `${left.category}|${left.record_id}`.localeCompare(`${right.category}|${right.record_id}`));
 }
-function isSnapshot(value) {
-    if (!isRecord(value) || !stringValue(value.revision))
-        return false;
-    for (const field of ["files", "captures", "result_memory", "asset_registry", "asset_index", "reference_checks"]) {
-        if (!Array.isArray(value[field]) || value[field].some((item) => !isRecord(item)))
-            return false;
-    }
-    return value.files.every((file) => Boolean(stringValue(file.file_id) && stringValue(file.name) && ["INBOX", "LIBRARY"].includes(stringValue(file.scope))));
-}
 function paginate(items, cursor, limit, revision) {
     let offset = 0;
     if (cursor) {
@@ -205,12 +196,92 @@ function handlerError(error, traceId) {
     }
     return structuredError("BACKEND_ERROR", "Visual library backend request failed", traceId, true);
 }
-async function readSnapshot(backend, traceId) {
-    const response = await backend("library_snapshot", { trace_id: traceId });
-    if (!isRecord(response) || !isSnapshot(response.snapshot)) {
-        throw new Error("INVALID_LIBRARY_SNAPSHOT");
+// Exhaustive, cursor-based Drive traversal: keeps calling the Apps Script
+// `library_snapshot` action with the cursor it returns until it reports
+// complete:true. Every page's scan_id/revision must stay stable across the
+// whole traversal; files are de-duplicated by file_id across pages so a
+// multi-parent Drive file (or a defensive re-send) never appears twice.
+// There is no silent partial success: a scan that cannot finish (missing
+// cursor, changing scan_id, or exceeding the safety page cap) is a thrown
+// error, not a truncated-but-labeled-ok snapshot.
+const LIBRARY_SCAN_MAX_PAGES = 5000;
+const LIBRARY_SCAN_PAGE_SIZE = "500";
+export async function readFullLibrarySnapshot(backend, traceId) {
+    const filesById = new Map();
+    let cursor;
+    let scanId;
+    let revision;
+    let pagesScanned = 0;
+    let foldersScanned = 0;
+    let filesScanned = 0;
+    let finalPage;
+    for (let page = 0; page < LIBRARY_SCAN_MAX_PAGES; page += 1) {
+        const params = { trace_id: traceId, page_size: LIBRARY_SCAN_PAGE_SIZE };
+        if (cursor)
+            params.cursor = cursor;
+        const response = await backend("library_snapshot", params);
+        if (!isRecord(response) || response.ok === false) {
+            throw new Error("INVALID_LIBRARY_SNAPSHOT");
+        }
+        if (typeof response.scan_id !== "string" || typeof response.revision !== "string") {
+            throw new Error("INVALID_LIBRARY_SNAPSHOT");
+        }
+        if (scanId && response.scan_id !== scanId) {
+            throw new Error("LIBRARY_SCAN_ID_CHANGED_MID_TRAVERSAL");
+        }
+        scanId = response.scan_id;
+        revision = response.revision;
+        pagesScanned += 1;
+        foldersScanned = Number(response.folders_scanned) || foldersScanned;
+        filesScanned = Number(response.files_scanned) || filesScanned;
+        const pageFiles = Array.isArray(response.files) ? response.files : [];
+        for (const file of pageFiles) {
+            if (!isRecord(file) || !isLibraryFileRecord(file)) {
+                throw new Error("INVALID_LIBRARY_SNAPSHOT");
+            }
+            filesById.set(String(file.file_id), file);
+        }
+        if (response.complete === true) {
+            finalPage = response;
+            break;
+        }
+        if (typeof response.next_cursor !== "string" || !response.next_cursor) {
+            throw new Error("LIBRARY_SCAN_INCOMPLETE_MISSING_CURSOR");
+        }
+        cursor = response.next_cursor;
     }
-    return response.snapshot;
+    if (!finalPage || !scanId || !revision) {
+        throw new Error("LIBRARY_SCAN_DID_NOT_COMPLETE");
+    }
+    const snapshot = {
+        revision,
+        scan: {
+            scan_id: scanId,
+            complete: true,
+            truncated: false,
+            coverage: "COMPLETE",
+            pages_scanned: pagesScanned,
+            folders_scanned: foldersScanned,
+            files_scanned: filesById.size || filesScanned,
+        },
+        files: [...filesById.values()].sort((left, right) => left.file_id.localeCompare(right.file_id)),
+        captures: isArrayOfRecords(finalPage.captures) ? finalPage.captures : [],
+        result_memory: isArrayOfRecords(finalPage.result_memory) ? finalPage.result_memory : [],
+        asset_registry: isArrayOfRecords(finalPage.asset_registry) ? finalPage.asset_registry : [],
+        asset_index: isArrayOfRecords(finalPage.asset_index) ? finalPage.asset_index : [],
+        reference_checks: isArrayOfRecords(finalPage.reference_checks)
+            ? finalPage.reference_checks
+            : [],
+    };
+    return snapshot;
+}
+function isArrayOfRecords(value) {
+    return Array.isArray(value) && value.every((item) => isRecord(item));
+}
+function isLibraryFileRecord(value) {
+    return Boolean(stringValue(value.file_id) &&
+        stringValue(value.name) &&
+        ["INBOX", "LIBRARY"].includes(stringValue(value.scope)));
 }
 export function createLibraryMaintenanceHandlers(backend) {
     let cachedSnapshot;
@@ -220,7 +291,7 @@ export function createLibraryMaintenanceHandlers(backend) {
         if (cachedSnapshot && Date.now() - cachedAt < snapshotTtlMs) {
             return cachedSnapshot;
         }
-        cachedSnapshot = await readSnapshot(backend, traceId);
+        cachedSnapshot = await readFullLibrarySnapshot(backend, traceId);
         cachedAt = Date.now();
         return cachedSnapshot;
     }

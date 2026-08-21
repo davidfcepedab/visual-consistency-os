@@ -26,15 +26,28 @@ export function createAppsScriptReadClient(input: {
     params: Record<string, string>
   ): Promise<unknown> => {
     const url = new URL(input.webAppUrl);
-    url.searchParams.set("action", action);
     url.searchParams.set("secret", input.sharedSecret);
 
-    for (const [key, value] of Object.entries(params)) {
-      url.searchParams.set(key, value);
+    // Exhaustive Drive cursors can legitimately exceed conservative GET URL
+    // limits. This remains a read operation, but transports its cursor in a
+    // JSON POST body so no continuation state is truncated by intermediaries.
+    const usePost = action === "library_snapshot";
+    if (!usePost) url.searchParams.set("action", action);
+
+    if (!usePost) {
+      for (const [key, value] of Object.entries(params)) {
+        url.searchParams.set(key, value);
+      }
     }
 
     const response = await fetchImpl(url, {
-      method: "GET",
+      method: usePost ? "POST" : "GET",
+      ...(usePost
+        ? {
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action, ...params }),
+          }
+        : {}),
       redirect: "follow",
       signal: AbortSignal.timeout(timeoutMs),
     });

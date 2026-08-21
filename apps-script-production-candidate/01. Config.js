@@ -50,7 +50,10 @@ const STATIC_CONFIG = Object.freeze({
 
     AUTO_APPROVE_MIN_IDENTITY: 4.5,
     AUTO_APPROVE_MIN_OVERALL: 4.5,
-    AUTO_REJECT_MAX_IDENTITY: 3.79,
+    // Documented scale: 1.0-2.9 Rejected, 3.0-3.9 Diagnostic. Hard rejection
+    // fires only below the Rejected/Diagnostic boundary, never inside the
+    // Diagnostic band. Applies uniformly to identity, overall, and anatomy.
+    AUTO_REJECT_THRESHOLD: 3.0,
 
     BATCH_MAX_IMAGES: 4,
     BATCH_IDLE_MINUTES: 20,
@@ -58,7 +61,9 @@ const STATIC_CONFIG = Object.freeze({
 
     BATCH_REVIEW_THRESHOLD: 4.4,
     BATCH_IDENTITY_THRESHOLD: 4.3,
-    BATCH_ARCHIVE_THRESHOLD: 3.5,
+    // Same Rejected/Diagnostic boundary as AUTO_REJECT_THRESHOLD, applied to
+    // the batch pipeline's identity, overall, and anatomy hard rejection.
+    BATCH_ARCHIVE_THRESHOLD: 3.0,
   },
 });
 

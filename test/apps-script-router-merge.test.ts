@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import { join } from "node:path";
 import test from "node:test";
 import vm from "node:vm";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { createAppsScriptReadClient } from "../src/apps-script-read-client.js";
 import { createSafeReadHandlers } from "../src/safe-read-tools.js";
 
@@ -16,6 +17,10 @@ type AppsScriptOutput = {
 };
 type AppsScriptGet = (event: {
   parameter?: Record<string, string>;
+}) => AppsScriptOutput;
+type AppsScriptPost = (event: {
+  parameter?: Record<string, string>;
+  postData?: { contents: string };
 }) => AppsScriptOutput;
 
 const ROUTER_ROOT = join(
@@ -254,6 +259,55 @@ function createSyntheticDriveApp() {
   };
 }
 
+function createSyntheticDriveV3() {
+  const folders: Record<string, { id: string; name: string; parent: string }> = {
+    "FOLDER-REVIEW": {
+      id: "FOLDER-REVIEW",
+      name: "03. Review",
+      parent: "1WCjfFllc76t7X9BEM63AFQleFeuNRD3b",
+    },
+  };
+  const files = [
+    {
+      id: "FILE-INBOX",
+      name: "new-reference.jpg",
+      mimeType: "image/jpeg",
+      modifiedTime: "2026-08-18T10:00:00.000Z",
+      size: "100",
+      parent: "1yDdDAVD8NpoLFDu-lhJpwqe3P60AjwkA",
+    },
+    {
+      id: "FILE-LIBRARY",
+      name: "candidate.png",
+      mimeType: "image/png",
+      modifiedTime: "2026-08-18T11:00:00.000Z",
+      size: "200",
+      parent: "FOLDER-REVIEW",
+    },
+  ];
+  return {
+    Files: {
+      list: (options: { q?: string }) => {
+        const parent = String(options.q || "").match(/'([^']+)' in parents/)?.[1] || "";
+        const wantsFolders = String(options.q || "").includes("mimeType = 'application/vnd.google-apps.folder'");
+        return {
+          files: wantsFolders
+            ? Object.values(folders)
+                .filter((folder) => folder.parent === parent)
+                .map(({ id, name }) => ({ id, name }))
+            : files
+                .filter((file) => file.parent === parent)
+                .map(({ parent: _parent, ...file }) => file),
+        };
+      },
+      get: (id: string) => {
+        if (files.some((file) => file.id === id)) return { id, trashed: false };
+        throw new Error("404 not found");
+      },
+    },
+  };
+}
+
 function loadRecoveredRouter() {
   const sheets = fixtureSheets();
   const original = JSON.stringify(sheets);
@@ -308,6 +362,7 @@ function loadRecoveredRouter() {
       }),
     },
     DriveApp: createSyntheticDriveApp(),
+    Drive: createSyntheticDriveV3(),
     PropertiesService: {
       getScriptProperties: () => ({
         getProperty: (name: string) =>
@@ -320,6 +375,27 @@ function loadRecoveredRouter() {
         [...crypto.createHash("sha256").update(value).digest()].map((byte) =>
           byte > 127 ? byte - 256 : byte
         ),
+      getUuid: () => "00000000-0000-4000-8000-000000000001",
+      newBlob: (value: string | number[]) => {
+        const bytes = typeof value === "string" ? Buffer.from(value, "utf8") : Buffer.from(value);
+        return {
+          getBytes: () => [...bytes],
+          getDataAsString: () => bytes.toString("utf8"),
+        };
+      },
+      gzip: (blob: { getBytes: () => number[] }) => {
+        const bytes = gzipSync(Buffer.from(blob.getBytes()));
+        return { getBytes: () => [...bytes] };
+      },
+      ungzip: (blob: { getBytes: () => number[] }) => {
+        const bytes = gunzipSync(Buffer.from(blob.getBytes()));
+        return {
+          getBytes: () => [...bytes],
+          getDataAsString: () => bytes.toString("utf8"),
+        };
+      },
+      base64EncodeWebSafe: (value: number[]) => Buffer.from(value).toString("base64url"),
+      base64DecodeWebSafe: (value: string) => [...Buffer.from(value, "base64url")],
     },
     ContentService: {
       MimeType: { JSON: "application/json" },
@@ -338,6 +414,7 @@ function loadRecoveredRouter() {
     "10.SafeReads.js",
     "11.LibraryReads.js",
     "12.GenerationContext.js",
+    "15.LibraryReconciliation.js",
     "05. WebApp.js",
   ]) {
     vm.runInContext(readFileSync(join(ROUTER_ROOT, file), "utf8"), context, {
@@ -347,6 +424,7 @@ function loadRecoveredRouter() {
 
   return {
     doGet: context.doGet as AppsScriptGet,
+    doPost: context.doPost as AppsScriptPost,
     sheets,
     original,
     writeAttempts: () => writeAttempts,
@@ -389,6 +467,7 @@ test("production router preserves HEAD actions and adds safe maintenance reads",
     "batches_catalog",
     "library_snapshot",
     "generation_context",
+    "apply_library_reconciliation",
   ]) {
     assert.match(source, new RegExp(`case ['"]${action}['"]`));
   }
@@ -397,15 +476,47 @@ test("production router preserves HEAD actions and adds safe maintenance reads",
   assert.match(source, /function findRequestByTraceId_\(sheet, traceId\)/);
 });
 
+test("library snapshot accepts a read-only POST cursor without writing", () => {
+  const runtime = loadRecoveredRouter();
+  const first = JSON.parse(runtime.doPost({
+    parameter: { secret: "router-fixture-secret" },
+    postData: { contents: JSON.stringify({ action: "library_snapshot", page_size: 1 }) },
+  }).text) as UnknownRecord;
+  assert.equal(first.ok, true);
+  assert.equal(first.complete, false);
+  const second = JSON.parse(runtime.doPost({
+    parameter: { secret: "router-fixture-secret" },
+    postData: {
+      contents: JSON.stringify({
+        action: "library_snapshot",
+        page_size: 1,
+        cursor: first.next_cursor,
+      }),
+    },
+  }).text) as UnknownRecord;
+  assert.equal(second.ok, true);
+  assert.equal(runtime.writeAttempts(), 0);
+  assert.equal(JSON.stringify(runtime.sheets), runtime.original);
+});
+
 test("library snapshot is versioned, read-only, and includes both registries", () => {
   const runtime = loadRecoveredRouter();
-  const response = callGet(runtime.doGet, "library_snapshot");
-  assert.equal(response.ok, true);
-  const snapshot = response.snapshot as UnknownRecord;
-  assert.match(snapshot.revision as string, /^library-[a-f0-9]{64}$/);
-  assert.equal((snapshot.files as UnknownRecord[]).length, 2);
-  assert.ok(Array.isArray(snapshot.asset_registry));
-  assert.ok(Array.isArray(snapshot.asset_index));
+  let response = callGet(runtime.doGet, "library_snapshot", { page_size: "1" });
+  const files: UnknownRecord[] = [];
+  while (true) {
+    assert.equal(response.ok, true);
+    files.push(...(response.files as UnknownRecord[]));
+    if (response.complete === true) break;
+    response = callGet(runtime.doGet, "library_snapshot", {
+      page_size: "1",
+      cursor: response.next_cursor as string,
+    });
+  }
+  assert.match(response.revision as string, /^library-[a-f0-9]{64}$/);
+  assert.equal(files.length, 2);
+  assert.equal(new Set(files.map((file) => file.file_id)).size, 2);
+  assert.ok(Array.isArray(response.asset_registry));
+  assert.ok(Array.isArray(response.asset_index));
   assert.equal(runtime.writeAttempts(), 0);
   assert.equal(JSON.stringify(runtime.sheets), runtime.original);
 });

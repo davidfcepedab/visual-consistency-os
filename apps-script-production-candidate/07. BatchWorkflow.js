@@ -297,26 +297,20 @@ function writeBatchScores_(batchId, captures, batchResult, cfg) {
   captures.forEach(capture => {
     const score = resultMap[String(capture.capture_id)];
     if (!score) {
+      const technicalErrorMessage = 'Gemini response did not include this capture_id';
       setCellByHeader_(
         capturesSheet,
         capture._sheetRow,
         'technical_error',
-        'Gemini response did not include this capture_id'
+        technicalErrorMessage
       );
+      registerTechnicalFailureFromBatch_(batchId, capture, technicalErrorMessage);
       return;
     }
 
     const file = DriveApp.getFileById(capture.file_id);
     const resultId = newId_('RES');
-    const normalizedAutoDecision =
-      Number(score.overall_score) < cfg.archiveThreshold
-        ? 'REJECT'
-        : (
-            Number(score.overall_score) >= cfg.reviewThreshold &&
-            Number(score.identity_fidelity) >= cfg.identityThreshold
-          )
-          ? 'APPROVE'
-          : 'ADJUST';
+    const normalizedAutoDecision = computeBatchAutoDecision_(score, cfg);
 
     writeResultMemory_(
       resultId,
@@ -344,7 +338,8 @@ function writeBatchScores_(batchId, captures, batchResult, cfg) {
 
       setCellByHeader_(capturesSheet, capture._sheetRow, 'status', 'ADJUSTMENT_REQUIRED');
       setCellByHeader_(capturesSheet, capture._sheetRow, 'selected_for_review', 'FALSE');
-      registerFailureFromBatch_(batchId, capture, score);
+      // ADJUST is a normal, expected outcome — not a failure. FAILURE_MEMORY
+      // is reserved for hard rejects and technical/blocking failures.
       return;
     }
 
@@ -379,10 +374,60 @@ function writeBatchScores_(batchId, captures, batchResult, cfg) {
   });
 }
 
+// Pure decision function, exported for direct unit testing. Recommendation
+// only — APPROVE and REJECT still require a human decision downstream.
+// Documented scale: 1.0-2.9 Rejected, 3.0-3.9 Diagnostic. Hard rejection
+// must never fire on a Diagnostic-band score (>= archiveThreshold).
+function computeBatchAutoDecision_(score, cfg) {
+  const identity = Number(score.identity_fidelity);
+  const overall = Number(score.overall_score);
+  const anatomy = Number(score.anatomy);
+  const rejectThreshold = cfg.archiveThreshold;
+
+  if (
+    identity < rejectThreshold ||
+    overall < rejectThreshold ||
+    anatomy < rejectThreshold
+  ) {
+    return 'REJECT';
+  }
+
+  if (overall >= cfg.reviewThreshold && identity >= cfg.identityThreshold) {
+    return 'APPROVE';
+  }
+
+  return 'ADJUST';
+}
+
 function ensureFilenamePrefix_(filename, prefix) {
   const clean = String(filename || '')
     .replace(/^(ADJUST|FAILED|APPROVED)\s*-\s*/i, '');
   return `${prefix}${clean}`;
+}
+
+// FAILURE_MEMORY is reserved for hard rejects and technical/blocking
+// failures — never for ADJUST, which is a normal, expected outcome.
+function registerTechnicalFailureFromBatch_(batchId, capture, message) {
+  appendObject_(getSheet_(STATIC_CONFIG.SHEETS.FAILURE_MEMORY), {
+    failure_id: newId_('FAIL'),
+    capture_id: capture.capture_id,
+    result_id: '',
+    request_id: capture.request_id || '',
+    batch_id: batchId,
+    project: capture.project || '',
+    subjects: capture.identity_subjects || '',
+    failure_category: 'TECHNICAL',
+    failure_description: message || '',
+    generator: capture.generator_inferred || '',
+    model: getRuntimeConfig_().geminiModel,
+    prompt_version: '',
+    reference_pack: '',
+    repeated_failure: 'FALSE',
+    do_not_reuse_as: '',
+    corrective_rule: '',
+    created_at: nowIso_(),
+    notes: '',
+  });
 }
 
 function registerFailureFromBatch_(batchId, capture, score) {
