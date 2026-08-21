@@ -34,6 +34,44 @@ export function createOAuthResourceMetadata(config) {
         resource_documentation: "https://visual-identity-os-mcp-4cf7h52zxa-uc.a.run.app/health",
     };
 }
+/**
+ * Compatibility metadata for MCP clients that probe the resource-server
+ * origin for RFC 8414 metadata before following authorization_servers.
+ *
+ * Auth0 remains the authorization server and token issuer; this endpoint only
+ * advertises its public OAuth endpoints from the MCP origin.
+ */
+export function createOAuthAuthorizationServerMetadata(config) {
+    return {
+        issuer: config.issuer,
+        authorization_endpoint: new URL("authorize", config.issuer).href,
+        token_endpoint: new URL("oauth/token", config.issuer).href,
+        registration_endpoint: new URL("oidc/register", config.issuer).href,
+        response_types_supported: ["code"],
+        grant_types_supported: ["authorization_code", "refresh_token"],
+        code_challenge_methods_supported: ["S256"],
+        token_endpoint_auth_methods_supported: [
+            "none",
+            "client_secret_post",
+            "client_secret_basic",
+        ],
+        scopes_supported: config.scopes,
+    };
+}
+export function createOAuthAuthorizationRedirectUrl(config, requestUrl) {
+    const incoming = new URL(requestUrl, config.publicUrl);
+    const target = new URL("authorize", config.issuer);
+    for (const [key, value] of incoming.searchParams) {
+        target.searchParams.append(key, value);
+    }
+    // Auth0 requires the custom API identifier. Claude's compatibility flow
+    // currently omits both audience and resource when it falls back to /authorize.
+    if (!target.searchParams.has("audience") &&
+        !target.searchParams.has("resource")) {
+        target.searchParams.set("audience", config.audience);
+    }
+    return target.href;
+}
 export function createBearerAuthenticator(input) {
     const verificationKey = input.verificationKey ??
         (input.oauth
