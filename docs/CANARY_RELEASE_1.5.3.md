@@ -29,3 +29,13 @@ Reauthorize the Claude canary connector, confirm Auth0 issues the custom API
 audience, list MCP tools, and run one read-only tool. Keep production traffic
 unchanged until all three checks pass.
 
+## Acceptance result
+
+- OAuth requests pass through the canary `/authorize` bridge.
+- Claude-authenticated MCP requests are accepted without 401 responses.
+- MCP initialization returned 200 and the initialized notification returned
+  202.
+- Tool discovery returned 17 tools.
+- `visual_get_system_status` completed as a read-only call with HTTP 200 and
+  no tool error.
+- MCP server and health metadata both report version 1.5.3.

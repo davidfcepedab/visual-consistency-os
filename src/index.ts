@@ -196,7 +196,7 @@ app.all("/mcp", async (req: Request, res: Response) => {
 function createServer(): McpServer {
   const server = new McpServer({
     name: "visual-identity-os",
-    version: "1.5.1",
+    version: "1.5.3",
   });
   const safeReadHandlers = createSafeReadHandlers(appsScriptSafeReadGet);
   const libraryMaintenanceHandlers = createLibraryMaintenanceHandlers(
