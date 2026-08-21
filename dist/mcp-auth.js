@@ -2,9 +2,11 @@ import { timingSafeEqual } from "node:crypto";
 import { createRemoteJWKSet, jwtVerify, } from "jose";
 export class McpAuthenticationError extends Error {
     status = 401;
-    constructor() {
+    reason;
+    constructor(reason = "authentication_failed") {
         super("Unauthorized MCP request");
         this.name = "McpAuthenticationError";
+        this.reason = reason;
     }
 }
 export function readOAuthConfiguration(env) {
@@ -64,10 +66,10 @@ export function createOAuthAuthorizationRedirectUrl(config, requestUrl) {
     for (const [key, value] of incoming.searchParams) {
         target.searchParams.append(key, value);
     }
-    // Auth0 requires the custom API identifier. Claude's compatibility flow
-    // currently omits both audience and resource when it falls back to /authorize.
-    if (!target.searchParams.has("audience") &&
-        !target.searchParams.has("resource")) {
+    // Auth0 requires its custom API identifier in `audience`. Claude supplies
+    // RFC 8707 `resource`, but Auth0 does not translate that value into the API
+    // audience and otherwise issues a /userinfo token.
+    if (!target.searchParams.has("audience")) {
         target.searchParams.set("audience", config.audience);
     }
     return target.href;
@@ -93,10 +95,19 @@ export function createBearerAuthenticator(input) {
             });
             return { method: "oauth", payload: verified.payload };
         }
-        catch {
-            throw new McpAuthenticationError();
+        catch (error) {
+            throw new McpAuthenticationError(authenticationFailureReason(error));
         }
     };
+}
+function authenticationFailureReason(error) {
+    if (!error || typeof error !== "object")
+        return "verification_failed";
+    const candidate = error;
+    const code = typeof candidate.code === "string" ? candidate.code : "verification_failed";
+    const claim = typeof candidate.claim === "string" ? candidate.claim : "";
+    const reason = typeof candidate.reason === "string" ? candidate.reason : "";
+    return [code, claim, reason].filter(Boolean).join(":");
 }
 export function oauthResourceMetadataUrl(publicUrl) {
     const url = new URL(publicUrl);

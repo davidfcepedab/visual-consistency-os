@@ -26,6 +26,7 @@ import {
   createPrepareGenerationHandlers,
 } from "./prepare-generation-tools.js";
 import {
+  McpAuthenticationError,
   createBearerAuthenticator,
   createOAuthAuthorizationRedirectUrl,
   createOAuthAuthorizationServerMetadata,
@@ -66,7 +67,7 @@ app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
     ok: true,
     service: "visual-identity-os-mcp",
-    version: "1.5.1",
+    version: "1.5.2",
   });
 });
 
@@ -161,6 +162,9 @@ app.all("/mcp", async (req: Request, res: Response) => {
         event: "mcp_request_failed",
         trace_id: traceId,
         error_type: error instanceof Error ? error.name : "UnknownError",
+        ...(error instanceof McpAuthenticationError
+          ? { auth_failure_reason: error.reason }
+          : {}),
       })
     );
 

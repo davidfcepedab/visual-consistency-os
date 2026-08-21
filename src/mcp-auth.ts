@@ -20,10 +20,12 @@ export type AuthenticationResult =
 
 export class McpAuthenticationError extends Error {
   readonly status = 401;
+  readonly reason: string;
 
-  constructor() {
+  constructor(reason = "authentication_failed") {
     super("Unauthorized MCP request");
     this.name = "McpAuthenticationError";
+    this.reason = reason;
   }
 }
 
@@ -102,12 +104,10 @@ export function createOAuthAuthorizationRedirectUrl(
     target.searchParams.append(key, value);
   }
 
-  // Auth0 requires the custom API identifier. Claude's compatibility flow
-  // currently omits both audience and resource when it falls back to /authorize.
-  if (
-    !target.searchParams.has("audience") &&
-    !target.searchParams.has("resource")
-  ) {
+  // Auth0 requires its custom API identifier in `audience`. Claude supplies
+  // RFC 8707 `resource`, but Auth0 does not translate that value into the API
+  // audience and otherwise issues a /userinfo token.
+  if (!target.searchParams.has("audience")) {
     target.searchParams.set("audience", config.audience);
   }
 
@@ -148,10 +148,26 @@ export function createBearerAuthenticator(input: {
         algorithms: ["RS256"],
       });
       return { method: "oauth", payload: verified.payload };
-    } catch {
-      throw new McpAuthenticationError();
+    } catch (error) {
+      throw new McpAuthenticationError(authenticationFailureReason(error));
     }
   };
+}
+
+function authenticationFailureReason(error: unknown): string {
+  if (!error || typeof error !== "object") return "verification_failed";
+
+  const candidate = error as {
+    code?: unknown;
+    claim?: unknown;
+    reason?: unknown;
+  };
+  const code =
+    typeof candidate.code === "string" ? candidate.code : "verification_failed";
+  const claim = typeof candidate.claim === "string" ? candidate.claim : "";
+  const reason = typeof candidate.reason === "string" ? candidate.reason : "";
+
+  return [code, claim, reason].filter(Boolean).join(":");
 }
 
 export function oauthResourceMetadataUrl(publicUrl: string): string {

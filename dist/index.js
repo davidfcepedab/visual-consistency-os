@@ -10,7 +10,7 @@ import { DetectOrphanCapturesInputSchema, GetCaptureInputSchema, ListBatchesByPr
 import { ListLibraryInventoryInputSchema, PlanLibraryReconciliationInputSchema, createLibraryMaintenanceHandlers, } from "./library-maintenance-tools.js";
 import { ApplyLibraryReconciliationInputSchema, createLibraryMutationHandlers, } from "./library-mutation-tools.js";
 import { PrepareGenerationInputSchema, createPrepareGenerationHandlers, } from "./prepare-generation-tools.js";
-import { createBearerAuthenticator, createOAuthAuthorizationRedirectUrl, createOAuthAuthorizationServerMetadata, createOAuthResourceMetadata, oauthResourceMetadataUrl, readOAuthConfiguration, } from "./mcp-auth.js";
+import { McpAuthenticationError, createBearerAuthenticator, createOAuthAuthorizationRedirectUrl, createOAuthAuthorizationServerMetadata, createOAuthResourceMetadata, oauthResourceMetadataUrl, readOAuthConfiguration, } from "./mcp-auth.js";
 const PORT = Number(process.env.PORT || 8080);
 const WEB_APP_URL = requireEnv("VISUAL_OS_WEB_APP_URL");
 const SHARED_SECRET = requireEnv("VISUAL_OS_SHARED_SECRET");
@@ -36,7 +36,7 @@ app.get("/health", (_req, res) => {
     res.status(200).json({
         ok: true,
         service: "visual-identity-os-mcp",
-        version: "1.5.1",
+        version: "1.5.2",
     });
 });
 if (OAUTH) {
@@ -106,6 +106,9 @@ app.all("/mcp", async (req, res) => {
             event: "mcp_request_failed",
             trace_id: traceId,
             error_type: error instanceof Error ? error.name : "UnknownError",
+            ...(error instanceof McpAuthenticationError
+                ? { auth_failure_reason: error.reason }
+                : {}),
         }));
         if (!res.headersSent) {
             if (status === 401 && OAUTH) {

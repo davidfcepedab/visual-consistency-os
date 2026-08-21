@@ -109,7 +109,7 @@ test("authorization fallback preserves PKCE and adds the Auth0 API audience", ()
   assert.equal(redirect.searchParams.get("audience"), oauth.audience);
 });
 
-test("authorization fallback does not override an explicit resource", () => {
+test("authorization fallback preserves resource and still adds Auth0 audience", () => {
   const redirect = new URL(
     createOAuthAuthorizationRedirectUrl(
       oauth,
@@ -121,7 +121,7 @@ test("authorization fallback does not override an explicit resource", () => {
     redirect.searchParams.get("resource"),
     "https://visual.example/mcp"
   );
-  assert.equal(redirect.searchParams.has("audience"), false);
+  assert.equal(redirect.searchParams.get("audience"), oauth.audience);
 });
 
 test("static API key remains available for controlled smoke and rollback", async () => {
