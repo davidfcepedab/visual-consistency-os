@@ -2,3 +2,5 @@
 .test-dist/
 dist/
 node_modules/
+.mcp.json
+.codex/

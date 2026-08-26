@@ -2,7 +2,7 @@
 
 Remote MCP server for the Visual Identity OS control plane.
 
-Current candidate version: `1.5.0` with 17 registered tools and two focused
+Current candidate version: `1.5.1` with 17 registered tools and two focused
 agent skills.
 
 This branch is the controlled integration line based on the source that

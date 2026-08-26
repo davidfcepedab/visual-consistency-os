@@ -20,10 +20,12 @@ export type AuthenticationResult =
 
 export class McpAuthenticationError extends Error {
   readonly status = 401;
+  readonly reason: string;
 
-  constructor() {
+  constructor(reason = "authentication_failed") {
     super("Unauthorized MCP request");
     this.name = "McpAuthenticationError";
+    this.reason = reason;
   }
 }
 
@@ -64,6 +66,56 @@ export function createOAuthResourceMetadata(config: OAuthConfiguration) {
   };
 }
 
+/**
+ * Compatibility metadata for MCP clients that probe the resource-server
+ * origin for RFC 8414 metadata before following authorization_servers.
+ *
+ * Auth0 remains the authorization server and token issuer; this endpoint only
+ * advertises its public OAuth endpoints from the MCP origin.
+ */
+export function createOAuthAuthorizationServerMetadata(
+  config: OAuthConfiguration
+) {
+  return {
+    issuer: config.issuer,
+    // Route authorization through the MCP origin so Auth0-specific audience
+    // normalization is applied before forwarding the request.
+    authorization_endpoint: new URL("/authorize", config.publicUrl).href,
+    token_endpoint: new URL("oauth/token", config.issuer).href,
+    registration_endpoint: new URL("oidc/register", config.issuer).href,
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
+    code_challenge_methods_supported: ["S256"],
+    token_endpoint_auth_methods_supported: [
+      "none",
+      "client_secret_post",
+      "client_secret_basic",
+    ],
+    scopes_supported: config.scopes,
+  };
+}
+
+export function createOAuthAuthorizationRedirectUrl(
+  config: OAuthConfiguration,
+  requestUrl: string
+): string {
+  const incoming = new URL(requestUrl, config.publicUrl);
+  const target = new URL("authorize", config.issuer);
+
+  for (const [key, value] of incoming.searchParams) {
+    target.searchParams.append(key, value);
+  }
+
+  // Auth0 requires its custom API identifier in `audience`. Claude supplies
+  // RFC 8707 `resource`, but Auth0 does not translate that value into the API
+  // audience and otherwise issues a /userinfo token.
+  if (!target.searchParams.has("audience")) {
+    target.searchParams.set("audience", config.audience);
+  }
+
+  return target.href;
+}
+
 export function createBearerAuthenticator(input: {
   apiKey: string;
   oauth?: OAuthConfiguration;
@@ -98,10 +150,26 @@ export function createBearerAuthenticator(input: {
         algorithms: ["RS256"],
       });
       return { method: "oauth", payload: verified.payload };
-    } catch {
-      throw new McpAuthenticationError();
+    } catch (error) {
+      throw new McpAuthenticationError(authenticationFailureReason(error));
     }
   };
+}
+
+function authenticationFailureReason(error: unknown): string {
+  if (!error || typeof error !== "object") return "verification_failed";
+
+  const candidate = error as {
+    code?: unknown;
+    claim?: unknown;
+    reason?: unknown;
+  };
+  const code =
+    typeof candidate.code === "string" ? candidate.code : "verification_failed";
+  const claim = typeof candidate.claim === "string" ? candidate.claim : "";
+  const reason = typeof candidate.reason === "string" ? candidate.reason : "";
+
+  return [code, claim, reason].filter(Boolean).join(":");
 }
 
 export function oauthResourceMetadataUrl(publicUrl: string): string {

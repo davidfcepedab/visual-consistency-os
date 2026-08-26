@@ -30,6 +30,16 @@ export const PrepareGenerationInputSchema = z.object({
 
 export type PrepareGenerationInput = z.infer<typeof PrepareGenerationInputSchema>;
 
+export const ExecuteRequestInputSchema = z.object({
+  request_id: z.string().trim().min(1).max(128),
+  generator: z.string().trim().min(1).max(64).optional().default("CHATGPT_IMAGE"),
+  credit_mode: z.enum(["ECONOMY", "QUALITY"]).optional().default("ECONOMY"),
+  required_anchor_ids: z.array(z.string().trim().min(1).max(128)).max(20).optional(),
+  trace_id: TraceIdSchema.optional(),
+});
+
+export type ExecuteRequestInput = z.infer<typeof ExecuteRequestInputSchema>;
+
 export type VisualAnchor = {
   asset_id: string;
   subject?: string;
@@ -85,7 +95,11 @@ export type GenerationWarning = {
   code:
     | "PROVENANCE_CONFLICT"
     | "AMBIGUOUS_IDENTITY_AUTHORITY_RESOLVED"
-    | "LOCATION_TEXT_FALLBACK";
+    | "LOCATION_TEXT_FALLBACK"
+    | "PRIORITY_0_FALLBACK"
+    | "REFERENCE_CONTEXT_UNAVAILABLE"
+    | "MODE_NORMALIZED"
+    | "REQUEST_CREATED";
   message: string;
   subject?: string;
   location?: string;
@@ -153,6 +167,7 @@ export type GenerationPacket = {
   reference_files: VisualAnchor[];
   blockers: Blocker[];
   warnings: GenerationWarning[];
+  auto_resolutions?: string[];
   guardrails: {
     auto_identity_promotion: false;
     human_approval_required: boolean;
@@ -773,10 +788,10 @@ function classifyGenerationReadiness(context: GenerationReadinessContext): {
       authority.priority_0_refs.length === 0 &&
       authority.subject !== "Mambo"
     ) {
-      blockers.push({
-        code: "MISSING_PRIORITY_0",
+      warnings.push({
+        code: "PRIORITY_0_FALLBACK",
         subject: authority.subject,
-        message: `Priority 0 was requested for ${authority.subject} but no approved Priority 0 reference is resolvable.`,
+        message: `Priority 0 was requested for ${authority.subject}, but the verified primary Identity Anchor will be used as a safe fallback.`,
       });
     }
 
@@ -1165,10 +1180,10 @@ function buildPrompt(input: {
       "Do not re-anchor identity from the edited result unless an Identity Anchor promotion already exists."
     );
   } else {
-    lines.push(
-      "",
-      `SCENE: ${input.parsed.scene || input.parsed.user_instruction}`
-    );
+    lines.push("", `REQUEST: ${input.parsed.user_instruction}`);
+    if (input.parsed.scene) {
+      lines.push("", `SCENE SUMMARY: ${input.parsed.scene}`);
+    }
   }
 
   if (input.requiredAnchors.length) {
@@ -1270,12 +1285,15 @@ export function prepareGenerationPacket(
   const blockers: Blocker[] = [...readiness.blockers];
   const warnings: GenerationWarning[] = [...readiness.warnings];
 
-  const requiredIds = extractExplicitIds(
-    parsed.user_instruction,
-    parsed.required_anchor_ids || []
-  ).filter((id) => !isLocationRequirementId(id));
+  const declaredRequiredIds = unique(parsed.required_anchor_ids || []).filter(
+    (id) => !isLocationRequirementId(id)
+  );
+  const mentionedIds = extractExplicitIds(parsed.user_instruction).filter(
+    (id) =>
+      !isLocationRequirementId(id) && !declaredRequiredIds.includes(id)
+  );
   const requiredAnchors: VisualAnchor[] = [];
-  for (const id of requiredIds) {
+  for (const id of declaredRequiredIds) {
     const located = findLocated(snapshot, id);
     if (!located) {
       blockers.push({
@@ -1290,9 +1308,41 @@ export function prepareGenerationPacket(
       toAnchor(located.record, located.source, subjects[0] || undefined)
     );
   }
+  for (const id of mentionedIds) {
+    const located = findLocated(snapshot, id);
+    if (!located) {
+      warnings.push({
+        code: "REFERENCE_CONTEXT_UNAVAILABLE",
+        message: `Context reference ${id} was mentioned but is unavailable; generation will continue without inventing or attaching it.`,
+      });
+      continue;
+    }
+    const subjects = recordSubjects(located.record);
+    pushUnique(
+      requiredAnchors,
+      toAnchor(located.record, located.source, subjects[0] || undefined)
+    );
+  }
+
+  // V6.1 Phase 1: Normalize mode if REGENERATE without base
+  let effectiveMode = parsed.mode;
+  const autoResolutions: string[] = [];
+  if (
+    parsed.mode === "REGENERATE" &&
+    !parsed.base_capture_id &&
+    !parsed.parent_request_id &&
+    !parsed.source_result_id
+  ) {
+    effectiveMode = "GENERATE";
+    autoResolutions.push("MODE_REGENERATE_TO_GENERATE");
+    warnings.push({
+      code: "MODE_NORMALIZED",
+      message: "REGENERATE was requested without a base source; mode normalized to GENERATE. Use base_capture_id, parent_request_id, or source_result_id to continue an existing image.",
+    });
+  }
 
   let frozenSource: UnknownRecord | undefined;
-  if (parsed.mode !== "GENERATE") {
+  if (effectiveMode !== "GENERATE") {
     if (parsed.base_capture_id) {
       frozenSource = captureById(snapshot, parsed.base_capture_id);
       if (!frozenSource) {
@@ -1380,14 +1430,28 @@ export function prepareGenerationPacket(
       })
     : "";
 
+  // V6.1 Phase 1: Auto-generate request_id for GENERATE mode if not provided
+  let requestId = "";
+  if (!requestId && effectiveMode === "GENERATE" && ready) {
+    // Generate a deterministic temporary ID; handler will replace with real ID after write
+    requestId = `REQ-${traceId.replace(/[^A-Za-z0-9-]/g, '').substring(0, 40)}`;
+    if (!autoResolutions.includes("REQUEST_CREATED")) {
+      autoResolutions.push("REQUEST_CREATED");
+      warnings.push({
+        code: "REQUEST_CREATED",
+        message: "Request ID was auto-generated for this new generation session.",
+      });
+    }
+  }
+
   return {
     ok: true,
     ready_to_generate: ready,
-    request_id: "",
+    request_id: requestId,
     trace_id: traceId,
     project: parsed.project,
     subjects,
-    mode: parsed.mode,
+    mode: effectiveMode,
     generator: parsed.generator || "CHATGPT_IMAGE",
     pack_version: packVersion,
     identity_authority: identity,
@@ -1403,6 +1467,7 @@ export function prepareGenerationPacket(
     reference_files: uniqueRefs,
     blockers,
     warnings,
+    ...(autoResolutions.length > 0 && { auto_resolutions: autoResolutions }),
     guardrails: {
       auto_identity_promotion: false,
       human_approval_required: humanApprovalRequired,
@@ -1460,6 +1525,108 @@ export function createPrepareGenerationHandlers(input: {
   write: BackendWriter;
 }) {
   return {
+    async executeRequest(
+      rawInput: z.input<typeof ExecuteRequestInputSchema>
+    ): Promise<SafeResult<GenerationPacket>> {
+      const parsed = ExecuteRequestInputSchema.safeParse(rawInput);
+      const traceId = createTraceId(
+        parsed.success ? parsed.data.trace_id : undefined
+      );
+      if (!parsed.success) {
+        return structuredError(
+          "INVALID_ARGUMENT",
+          "visual_execute_request input is invalid",
+          traceId
+        );
+      }
+
+      try {
+        const response = await input.read("generation_context", {
+          trace_id: traceId,
+        });
+        if (!isRecord(response) || !isSnapshot(response.snapshot)) {
+          return structuredError(
+            "BACKEND_ERROR",
+            "Visual generation context is unavailable",
+            traceId,
+            true
+          );
+        }
+
+        const existing = requestById(response.snapshot, parsed.data.request_id);
+        if (!existing) {
+          return structuredError(
+            "NOT_FOUND",
+            `Visual request ${parsed.data.request_id} was not found`,
+            traceId
+          );
+        }
+
+        const status = field(existing, "status").toUpperCase();
+        if (status.includes("CANCEL")) {
+          return structuredError(
+            "CONFLICT",
+            `Visual request ${parsed.data.request_id} is cancelled and cannot be generated`,
+            traceId
+          );
+        }
+
+        const project = field(existing, "project");
+        const subjects = splitList(field(existing, "subjects"));
+        const prompt = field(existing, "prompt");
+        const scene = field(existing, "scene");
+        if (!project || subjects.length === 0 || !prompt) {
+          return structuredError(
+            "INVALID_ARGUMENT",
+            `Visual request ${parsed.data.request_id} is missing project, subjects, or prompt`,
+            traceId
+          );
+        }
+
+        const storedMode = field(existing, "mode").toUpperCase();
+        const mode: PrepareGenerationInput["mode"] = /^REGENERATE(?:_|$)/.test(storedMode)
+          ? "REGENERATE"
+          : /^EDIT(?:_|$)/.test(storedMode)
+            ? "EDIT"
+            : "GENERATE";
+        const parentRequestId = field(existing, "parent_request_id");
+        const sourceResultId = field(existing, "source_result_id");
+
+        const packet = prepareGenerationPacket(
+          PrepareGenerationInputSchema.parse({
+            project,
+            subjects,
+            user_instruction: prompt,
+            scene,
+            generator:
+              parsed.data.generator ||
+              field(existing, "mechanism", "generator") ||
+              "CHATGPT_IMAGE",
+            mode,
+            parent_request_id: parentRequestId,
+            source_result_id: sourceResultId,
+            iteration: Number(field(existing, "iteration") || 1),
+            required_anchor_ids: parsed.data.required_anchor_ids,
+            trace_id: traceId,
+          }),
+          response.snapshot,
+          traceId
+        );
+
+        return {
+          ...packet,
+          request_id: parsed.data.request_id,
+        };
+      } catch {
+        return structuredError(
+          "BACKEND_ERROR",
+          "Existing visual request preparation failed",
+          traceId,
+          true
+        );
+      }
+    },
+
     async prepareGeneration(
       rawInput: z.input<typeof PrepareGenerationInputSchema>
     ): Promise<SafeResult<GenerationPacket>> {

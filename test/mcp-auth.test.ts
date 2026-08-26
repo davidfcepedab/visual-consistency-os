@@ -9,6 +9,8 @@ import {
 import {
   McpAuthenticationError,
   createBearerAuthenticator,
+  createOAuthAuthorizationRedirectUrl,
+  createOAuthAuthorizationServerMetadata,
   createOAuthResourceMetadata,
   oauthResourceMetadataUrl,
   readOAuthConfiguration,
@@ -65,6 +67,61 @@ test("protected resource metadata advertises Auth0-compatible OAuth", () => {
     oauthResourceMetadataUrl(oauth.publicUrl),
     "https://visual.example/.well-known/oauth-protected-resource"
   );
+});
+
+test("authorization server compatibility metadata points to Auth0", () => {
+  assert.deepEqual(createOAuthAuthorizationServerMetadata(oauth), {
+    issuer: "https://issuer.example/",
+    authorization_endpoint: "https://visual.example/authorize",
+    token_endpoint: "https://issuer.example/oauth/token",
+    registration_endpoint: "https://issuer.example/oidc/register",
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
+    code_challenge_methods_supported: ["S256"],
+    token_endpoint_auth_methods_supported: [
+      "none",
+      "client_secret_post",
+      "client_secret_basic",
+    ],
+    scopes_supported: ["openid", "profile", "email", "offline_access"],
+  });
+});
+
+test("authorization fallback preserves PKCE and adds the Auth0 API audience", () => {
+  const redirect = new URL(
+    createOAuthAuthorizationRedirectUrl(
+      oauth,
+      "/authorize?response_type=code&client_id=client-123&redirect_uri=https%3A%2F%2Fclaude.ai%2Fapi%2Fmcp%2Fauth_callback&code_challenge=challenge&code_challenge_method=S256&state=state-123"
+    )
+  );
+
+  assert.equal(redirect.origin, "https://issuer.example");
+  assert.equal(redirect.pathname, "/authorize");
+  assert.equal(redirect.searchParams.get("response_type"), "code");
+  assert.equal(redirect.searchParams.get("client_id"), "client-123");
+  assert.equal(
+    redirect.searchParams.get("redirect_uri"),
+    "https://claude.ai/api/mcp/auth_callback"
+  );
+  assert.equal(redirect.searchParams.get("code_challenge"), "challenge");
+  assert.equal(redirect.searchParams.get("code_challenge_method"), "S256");
+  assert.equal(redirect.searchParams.get("state"), "state-123");
+  assert.equal(redirect.searchParams.get("audience"), oauth.audience);
+});
+
+test("authorization fallback preserves resource and still adds Auth0 audience", () => {
+  const redirect = new URL(
+    createOAuthAuthorizationRedirectUrl(
+      oauth,
+      "/authorize?client_id=client-123&resource=https%3A%2F%2Fvisual.example%2Fmcp"
+    )
+  );
+
+  assert.equal(
+    redirect.searchParams.get("resource"),
+    "https://visual.example/mcp"
+  );
+  assert.equal(redirect.searchParams.get("audience"), oauth.audience);
 });
 
 test("static API key remains available for controlled smoke and rollback", async () => {

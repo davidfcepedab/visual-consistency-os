@@ -26,7 +26,10 @@ import {
   createPrepareGenerationHandlers,
 } from "./prepare-generation-tools.js";
 import {
+  McpAuthenticationError,
   createBearerAuthenticator,
+  createOAuthAuthorizationRedirectUrl,
+  createOAuthAuthorizationServerMetadata,
   createOAuthResourceMetadata,
   oauthResourceMetadataUrl,
   readOAuthConfiguration,
@@ -64,12 +67,14 @@ app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
     ok: true,
     service: "visual-identity-os-mcp",
-    version: "1.5.0",
+    version: "1.5.3",
   });
 });
 
 if (OAUTH) {
   const metadata = createOAuthResourceMetadata(OAUTH);
+  const authorizationServerMetadata =
+    createOAuthAuthorizationServerMetadata(OAUTH);
   app.get(
     [
       "/.well-known/oauth-protected-resource",
@@ -79,6 +84,25 @@ if (OAUTH) {
       res.status(200).json(metadata);
     }
   );
+
+  app.get(
+    [
+      "/.well-known/oauth-authorization-server",
+      "/.well-known/oauth-authorization-server/mcp",
+    ],
+    (_req: Request, res: Response) => {
+      res.status(200).json(authorizationServerMetadata);
+    }
+  );
+
+  // Backward-compatible fallback for clients that derive /authorize from the
+  // MCP origin instead of using the advertised Auth0 endpoint.
+  app.get("/authorize", (req: Request, res: Response) => {
+    res.redirect(
+      302,
+      createOAuthAuthorizationRedirectUrl(OAUTH, req.originalUrl)
+    );
+  });
 }
 
 app.all("/mcp", async (req: Request, res: Response) => {
@@ -138,6 +162,9 @@ app.all("/mcp", async (req: Request, res: Response) => {
         event: "mcp_request_failed",
         trace_id: traceId,
         error_type: error instanceof Error ? error.name : "UnknownError",
+        ...(error instanceof McpAuthenticationError
+          ? { auth_failure_reason: error.reason }
+          : {}),
       })
     );
 
@@ -147,7 +174,7 @@ app.all("/mcp", async (req: Request, res: Response) => {
           "WWW-Authenticate",
           `Bearer resource_metadata="${oauthResourceMetadataUrl(
             OAUTH.publicUrl
-          )}"`
+          )}", scope="${OAUTH.scopes.join(" ")}"`
         );
       }
       res.status(status).json({
@@ -169,7 +196,7 @@ app.all("/mcp", async (req: Request, res: Response) => {
 function createServer(): McpServer {
   const server = new McpServer({
     name: "visual-identity-os",
-    version: "1.5.0",
+    version: "1.5.3",
   });
   const safeReadHandlers = createSafeReadHandlers(appsScriptSafeReadGet);
   const libraryMaintenanceHandlers = createLibraryMaintenanceHandlers(
