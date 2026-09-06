@@ -50,6 +50,11 @@ function doGet(e) {
           getGenerationContextSafe_()
         );
 
+      case 'reference_image':
+        return jsonResponse_(
+          getReferenceImageSafe_(e?.parameter?.file_id || '')
+        );
+
       case 'active_session':
         return jsonResponse_(getActiveVisualSession_());
 

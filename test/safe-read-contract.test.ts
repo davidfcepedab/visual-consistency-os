@@ -485,3 +485,18 @@ test("library reconciliation preserves structured idempotency lookup errors", as
   );
   assert.match(source, /throwOnBackendError\s*&&[\s\S]*?"ok" in parsed/);
 });
+
+test("reference bitmap delivery is registered as a read-only exact-ID route", async () => {
+  const router = await readFile("apps-script-production-candidate/05. WebApp.js", "utf8");
+  const delivery = await readFile(
+    "apps-script-production-candidate/16.ReferenceDelivery.js",
+    "utf8"
+  );
+  assert.match(
+    router,
+    /case 'reference_image':[\s\S]*?getReferenceImageSafe_\(e\?\.parameter\?\.file_id \|\| ''\)/
+  );
+  assert.match(delivery, /DriveApp\.getFileById\(exactId\)/);
+  assert.match(delivery, /Reference is not registered/);
+  assert.doesNotMatch(delivery, /appendRow|setValue|setValues|createFile|moveTo|setTrashed/);
+});
