@@ -158,3 +158,47 @@ npm start
 Health endpoint: `http://localhost:18080/health`
 
 MCP endpoint: `http://localhost:18080/mcp`
+
+## Reference Packs synchronization repair (candidate, not deployed)
+
+The library adapter previously scanned only Inbox and Image Library. Reference
+Packs is a separate subtree and was excluded regardless of folder names. This
+candidate includes the verified Reference Packs root by ID; renamed descendants
+are discovered through parent IDs. Membership remains inventory evidence only.
+`REGISTER_CANDIDATE` still cannot approve or promote identity references.
+
+Generation reads both `ASSET_REGISTRY` and `13_Asset_Index`. Moving a Drive file
+does not update either registry. Historical `APPROVED_TOP` entries with the
+explicit V6 audit result `exact Drive ID returned 404 / NOT_FOUND` are now excluded
+from generation packets, including explicit reference requests. A subsequent
+structured `physical_status=EXISTS` check can supersede that historical warning;
+it does not itself grant approval. Existing human decisions are not rewritten.
+
+After deploying this candidate through the existing canary release gate:
+
+1. Record direct Drive edits as exact file IDs, old/new parent IDs, and the human
+   decision source. Preserve the existing primary unless separately authorized.
+2. Call `visual_plan_library_reconciliation` with `dry_run=true` and
+   `force_refresh=true`, **without a cursor**. The new flag bypasses the five-minute
+   in-process cache. It is unavailable on the previous deployment.
+3. Confirm `scan.complete=true` and inspect exact IDs through the paginated
+   inventory. Continue using returned cursors with `force_refresh=false`.
+   Cursors now bind to the Drive scan as well as the Sheets revision; if a scan
+   expires, restart explicitly instead of mixing pages across scans.
+4. Dry-run candidate registration for missing IDs using the returned Sheets
+   `revision`. Apply only the authorized diff with an idempotency key and readback.
+   This step does not reconcile authority or change P0 composition.
+5. Reconcile the exact human-approved authority changes through an authorized
+   authority operation and verify both registries and the governing document.
+   The current exposed MCP tools still lack exact-file-ID P0 upsert/demotion:
+   `visual_promote_asset` requires an existing approved capture. The internal
+   `update_asset_authority` adapter matches names, cannot insert absent rows, and
+   is not an adequate substitute for that missing operation. Do not bypass these
+   limits by silently editing authority cells.
+6. Only after registration and authority reconciliation, validate the generation
+   packet's selected IDs and physical attachments. A minimum ECONOMY packet may
+   attach just the facial primary; body-sensitive requests must explicitly
+   require the approved body references needed for that request.
+
+Deployment, authority reconciliation and physical delivery verification remain
+separate release gates. Local tests do not establish production readiness.

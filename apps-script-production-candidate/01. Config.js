@@ -37,6 +37,9 @@ const STATIC_CONFIG = Object.freeze({
 
     // Visible Drive name: 05. Image Library | Organizada
     LIBRARY_ORGANIZED: '1WCjfFllc76t7X9BEM63AFQleFeuNRD3b',
+
+    // Inventory scope only; folder membership never grants identity authority.
+    REFERENCE_PACKS: '1FcTPgqHuIQ4In2NyB0Tw4UMrgoxoKwYu',
   },
 
   DEFAULTS: {
