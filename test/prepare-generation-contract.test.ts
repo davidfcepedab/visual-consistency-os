@@ -157,6 +157,56 @@ function handlersFor(snapshot: GenerationContextSnapshot, writes: Record<string,
   });
 }
 
+test("historical 404 body locks are excluded even when their approval status remains active", async () => {
+  const snapshot = authoritySnapshot();
+  snapshot.asset_index.push({
+    Asset: "DAVID_POOL_SWIMMING_PRACTICE_ANCHOR.png",
+    "Character / Area": "David", Type: "High-risk pool/body anchor",
+    Status: "APPROVED_TOP", "Drive Link": "https://drive.google.com/file/d/FILE-LEGACY-POOL/view",
+    Notes: "V6 AUDIT 2026-08-18: exact Drive ID returned 404 / NOT_FOUND. Historical decision retained; do not treat link as currently usable.",
+  });
+  const result = await handlersFor(snapshot).prepareGeneration({
+    project: "TEST-REFERENCE-DELIVERY", subjects: ["David"],
+    user_instruction: "One poolside photograph.",
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const david = result.identity_authority.find((item) => item.subject === "David");
+  assert.ok(david);
+  assert.equal(JSON.stringify(david).includes("FILE-LEGACY-POOL"), false);
+  assert.equal(david.primary_identity_anchor?.file_id, "FILE-DAVID-P0");
+  assert.equal(JSON.stringify(snapshot.asset_index).includes("APPROVED_TOP"), true,
+    "filtering must not mutate historical decisions");
+});
+
+test("explicit later existence check permits a recovered reference with an old audit note", async () => {
+  const snapshot = authoritySnapshot();
+  snapshot.asset_registry[1].notes = "V6 AUDIT 2026-08-18: exact Drive ID returned 404 / NOT_FOUND.";
+  snapshot.asset_registry[1].physical_status = "EXISTS";
+  const result = await handlersFor(snapshot).prepareGeneration({
+    project: "TEST-REFERENCE-RECOVERED", subjects: ["David"],
+    user_instruction: "One photograph.",
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.identity_authority[0].body_anchor?.file_id, "FILE-DAVID-BODY");
+});
+
+test("requiring an unavailable ID cannot bypass exclusion or create a request", async () => {
+  const snapshot = authoritySnapshot();
+  snapshot.asset_registry[1].physical_status = "UNAVAILABLE";
+  const writes: Record<string, unknown>[] = [];
+  const result = await handlersFor(snapshot, writes).prepareGeneration({
+    project: "TEST-REQUIRED-UNAVAILABLE", subjects: ["David"],
+    user_instruction: "One photograph.", required_anchor_ids: ["FILE-DAVID-BODY"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.ready_to_generate, false);
+  assert.ok(result.blockers.some((blocker) => blocker.code === "MISSING_REQUIRED_REFERENCE"));
+  assert.equal(writes.length, 0);
+});
+
 test("Test A — simple generation hands off to the host native renderer", async () => {
   const writes: Record<string, unknown>[] = [];
   const result = await handlersFor(authoritySnapshot(), writes).prepareGeneration({

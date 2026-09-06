@@ -126,6 +126,48 @@ test("reconciliation tool only accepts dry_run true", async () => {
   }
 });
 
+test("explicit refresh observes new Drive files and invalidates an older scan cursor", async () => {
+  let calls = 0;
+  const handlers = createLibraryMaintenanceHandlers(async () => {
+    calls += 1;
+    const current = structuredClone(snapshot);
+    if (calls > 1) current.files.push({
+      file_id: "FILE-NEW-P0", name: "reference.png", mime_type: "image/png",
+      path: "01. Reference Packs/Renamed/reference.png", scope: "LIBRARY",
+    });
+    // Direct Drive edits leave the Sheets revision unchanged.
+    return { ...completeSnapshotResponse(current), scan_id: `scan-${calls}` };
+  });
+  const old = await handlers.listLibraryInventory({ limit: 1 });
+  assert.equal(old.ok, true);
+  if (!old.ok) return;
+  await handlers.planLibraryReconciliation({ dry_run: true });
+  assert.equal(calls, 1, "ordinary reads reuse the cached scan");
+  const refreshed = await handlers.planLibraryReconciliation({ dry_run: true, force_refresh: true });
+  assert.equal(refreshed.ok, true);
+  if (!refreshed.ok) return;
+  assert.equal(calls, 2);
+  assert.equal(refreshed.write_count, 0);
+  assert.ok(refreshed.items.some((item) => item.record_id === "FILE-NEW-P0"));
+  const stale = await handlers.listLibraryInventory({ cursor: old.next_cursor });
+  assert.equal(stale.ok, false, "must not mix pages from different Drive scans");
+  const invalid = await handlers.listLibraryInventory({ cursor: old.next_cursor, force_refresh: true });
+  assert.equal(invalid.ok, false);
+  assert.equal(calls, 2, "invalid refresh must not start another scan");
+});
+
+test("failed explicit refresh does not serve the previous cached snapshot", async () => {
+  let calls = 0;
+  const handlers = createLibraryMaintenanceHandlers(async () => {
+    if (++calls === 2) throw new Error("temporary backend failure");
+    return completeSnapshotResponse(snapshot);
+  });
+  assert.equal((await handlers.listLibraryInventory({})).ok, true);
+  assert.equal((await handlers.listLibraryInventory({ force_refresh: true })).ok, false);
+  assert.equal((await handlers.listLibraryInventory({})).ok, true);
+  assert.equal(calls, 3);
+});
+
 test("full traversal has neither duplicates nor omissions across backend pages", async () => {
   const calls: Record<string, string>[] = [];
   const result = await readFullLibrarySnapshot(async (_action, params) => {

@@ -234,6 +234,9 @@ function createSyntheticDriveApp() {
   }
   const review = makeFolder("FOLDER-REVIEW", "03. Review", [files["FILE-LIBRARY"]]);
   const folders: Record<string, FixtureFolder> = {
+    "1FcTPgqHuIQ4In2NyB0Tw4UMrgoxoKwYu": makeFolder(
+      "1FcTPgqHuIQ4In2NyB0Tw4UMrgoxoKwYu", "01. Reference Packs", []
+    ),
     "1yDdDAVD8NpoLFDu-lhJpwqe3P60AjwkA": makeFolder(
       "1yDdDAVD8NpoLFDu-lhJpwqe3P60AjwkA",
       "00. Inbox",
@@ -261,6 +264,11 @@ function createSyntheticDriveApp() {
 
 function createSyntheticDriveV3() {
   const folders: Record<string, { id: string; name: string; parent: string }> = {
+    "FOLDER-RENAMED-P0": {
+      id: "FOLDER-RENAMED-P0",
+      name: "Approved Anchors (Images)",
+      parent: "1FcTPgqHuIQ4In2NyB0Tw4UMrgoxoKwYu",
+    },
     "FOLDER-REVIEW": {
       id: "FOLDER-REVIEW",
       name: "03. Review",
@@ -268,6 +276,14 @@ function createSyntheticDriveV3() {
     },
   };
   const files = [
+    {
+      id: "FILE-REFERENCE-P0",
+      name: "new-p0-reference.png",
+      mimeType: "image/png",
+      modifiedTime: "2026-09-06T16:50:00.000Z",
+      size: "300",
+      parent: "FOLDER-RENAMED-P0",
+    },
     {
       id: "FILE-INBOX",
       name: "new-reference.jpg",
@@ -513,8 +529,13 @@ test("library snapshot is versioned, read-only, and includes both registries", (
     });
   }
   assert.match(response.revision as string, /^library-[a-f0-9]{64}$/);
-  assert.equal(files.length, 2);
-  assert.equal(new Set(files.map((file) => file.file_id)).size, 2);
+  assert.equal(files.length, 3);
+  assert.equal(new Set(files.map((file) => file.file_id)).size, 3);
+  const reference = files.find((file) => file.file_id === "FILE-REFERENCE-P0");
+  assert.equal(reference?.parent_id, "FOLDER-RENAMED-P0");
+  assert.equal(reference?.path, "01. Reference Packs/Approved Anchors (Images)/new-p0-reference.png");
+  assert.equal(reference?.scope, "LIBRARY");
+  assert.equal(reference?.status, undefined, "folder membership grants no authority");
   assert.ok(Array.isArray(response.asset_registry));
   assert.ok(Array.isArray(response.asset_index));
   assert.equal(runtime.writeAttempts(), 0);

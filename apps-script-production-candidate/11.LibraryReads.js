@@ -1,8 +1,8 @@
 /**
  * VISUAL IDENTITY OS — LIBRARY MAINTENANCE READS
  *
- * Cursor-based, exhaustive traversal of the configured Inbox and organized
- * library Drive roots using the Drive v3 advanced service (Drive.Files.list
+ * Cursor-based, exhaustive traversal of the configured Inbox, organized
+ * library and Reference Packs roots using the Drive v3 advanced service (Drive.Files.list
  * with pageToken). Replaces the old 2500-file bounded, single-call scan:
  * every call returns exactly one page plus a next_cursor; the caller must
  * keep calling with that cursor until `complete: true` to see the whole
@@ -112,6 +112,7 @@ function startLibraryScan_() {
 
   const inboxRoot = DriveApp.getFolderById(STATIC_CONFIG.FOLDERS.INBOX);
   const libraryRoot = DriveApp.getFolderById(STATIC_CONFIG.FOLDERS.LIBRARY_ORGANIZED);
+  const referenceRoot = DriveApp.getFolderById(STATIC_CONFIG.FOLDERS.REFERENCE_PACKS);
 
   return {
     scanId,
@@ -119,6 +120,7 @@ function startLibraryScan_() {
     pendingFolders: [
       { folderId: STATIC_CONFIG.FOLDERS.INBOX, path: inboxRoot.getName(), depth: 0, scope: 'INBOX' },
       { folderId: STATIC_CONFIG.FOLDERS.LIBRARY_ORGANIZED, path: libraryRoot.getName(), depth: 0, scope: 'LIBRARY' },
+      { folderId: STATIC_CONFIG.FOLDERS.REFERENCE_PACKS, path: referenceRoot.getName(), depth: 0, scope: 'LIBRARY' },
     ],
     currentFolder: null,
     currentFolderPageToken: null,

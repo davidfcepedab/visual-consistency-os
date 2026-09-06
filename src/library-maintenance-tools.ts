@@ -70,6 +70,7 @@ export type LibraryFinding = {
 
 export const ListLibraryInventoryInputSchema = z.object({
   scope: z.enum(["ALL", "INBOX", "LIBRARY"]).default("ALL"),
+  force_refresh: z.boolean().default(false),
   cursor: PaginationCursorSchema.optional(),
   limit: z.number().int().min(1).max(200).default(50),
   trace_id: TraceIdSchema.optional(),
@@ -77,6 +78,7 @@ export const ListLibraryInventoryInputSchema = z.object({
 
 export const PlanLibraryReconciliationInputSchema = z.object({
   dry_run: z.literal(true),
+  force_refresh: z.boolean().default(false),
   cursor: PaginationCursorSchema.optional(),
   limit: z.number().int().min(1).max(200).default(50),
   trace_id: TraceIdSchema.optional(),
@@ -320,6 +322,9 @@ export async function readFullLibrarySnapshot(backend: BackendReader, traceId: s
     if (scanId && response.scan_id !== scanId) {
       throw new Error("LIBRARY_SCAN_ID_CHANGED_MID_TRAVERSAL");
     }
+    if (revision && response.revision !== revision) {
+      throw new Error("LIBRARY_SCAN_REVISION_CHANGED_MID_TRAVERSAL");
+    }
     scanId = response.scan_id;
     revision = response.revision;
     pagesScanned += 1;
@@ -388,10 +393,12 @@ export function createLibraryMaintenanceHandlers(backend: BackendReader) {
   let cachedAt = 0;
   const snapshotTtlMs = 5 * 60 * 1000;
 
-  async function readCachedSnapshot(traceId: string) {
-    if (cachedSnapshot && Date.now() - cachedAt < snapshotTtlMs) {
+  async function readCachedSnapshot(traceId: string, forceRefresh: boolean) {
+    if (!forceRefresh && cachedSnapshot && Date.now() - cachedAt < snapshotTtlMs) {
       return cachedSnapshot;
     }
+    // A failed explicit refresh must not leave an older snapshot reusable.
+    cachedSnapshot = undefined;
     cachedSnapshot = await readFullLibrarySnapshot(backend, traceId);
     cachedAt = Date.now();
     return cachedSnapshot;
@@ -404,13 +411,19 @@ export function createLibraryMaintenanceHandlers(backend: BackendReader) {
       const parsed = ListLibraryInventoryInputSchema.safeParse(rawInput);
       const traceId = createTraceId(parsed.success ? parsed.data.trace_id : undefined);
       if (!parsed.success) return structuredError("INVALID_ARGUMENT", "Library inventory query is invalid", traceId);
+      if (parsed.data.force_refresh && parsed.data.cursor) {
+        return structuredError("INVALID_ARGUMENT", "force_refresh requires a new scan without a cursor", traceId);
+      }
       try {
-        const snapshot = await readCachedSnapshot(traceId);
+        const snapshot = await readCachedSnapshot(traceId, parsed.data.force_refresh);
         const unique = new Map(snapshot.files.map((file) => [file.file_id, file]));
         const files = [...unique.values()]
           .filter((file) => parsed.data.scope === "ALL" || file.scope === parsed.data.scope)
           .sort((left, right) => left.file_id.localeCompare(right.file_id));
-        return { ok: true, trace_id: traceId, revision: snapshot.revision, scan: snapshot.scan, ...paginate(files, parsed.data.cursor, parsed.data.limit, snapshot.revision) };
+        // Sheets revision is retained for mutation concurrency. Pagination also
+        // binds to the Drive scan, since direct Drive edits do not change Sheets.
+        const cursorRevision = `${snapshot.revision}:${snapshot.scan?.scan_id}`;
+        return { ok: true, trace_id: traceId, revision: snapshot.revision, scan: snapshot.scan, ...paginate(files, parsed.data.cursor, parsed.data.limit, cursorRevision) };
       } catch (error) {
         return handlerError(error, traceId);
       }
@@ -422,9 +435,13 @@ export function createLibraryMaintenanceHandlers(backend: BackendReader) {
       const parsed = PlanLibraryReconciliationInputSchema.safeParse(rawInput);
       const traceId = createTraceId(parsed.success ? parsed.data.trace_id : undefined);
       if (!parsed.success) return structuredError("INVALID_ARGUMENT", "dry_run=true is required for library reconciliation", traceId);
+      if (parsed.data.force_refresh && parsed.data.cursor) {
+        return structuredError("INVALID_ARGUMENT", "force_refresh requires a new scan without a cursor", traceId);
+      }
       try {
-        const snapshot = await readCachedSnapshot(traceId);
-        const page = paginate(planLibraryReconciliation(snapshot), parsed.data.cursor, parsed.data.limit, snapshot.revision);
+        const snapshot = await readCachedSnapshot(traceId, parsed.data.force_refresh);
+        const cursorRevision = `${snapshot.revision}:${snapshot.scan?.scan_id}`;
+        const page = paginate(planLibraryReconciliation(snapshot), parsed.data.cursor, parsed.data.limit, cursorRevision);
         return { ok: true, trace_id: traceId, revision: snapshot.revision, scan: snapshot.scan, dry_run: true, write_count: 0, ...page };
       } catch (error) {
         return handlerError(error, traceId);

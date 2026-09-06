@@ -393,7 +393,18 @@ const VERIFIED_APPROVAL_STATUS_VALUES = [
 function isUsableStatus(record: UnknownRecord): boolean {
   const status = statusOf(record);
   if (!status) return false;
-  return USABLE_STATUS_VALUES.includes(status);
+  return USABLE_STATUS_VALUES.includes(status) && !hasUnavailableReference(record);
+}
+
+function hasUnavailableReference(record: UnknownRecord): boolean {
+  const physical = field(record, "physical_status", "drive_status").toUpperCase();
+  if (["NOT_FOUND", "404", "BROKEN", "INACCESSIBLE", "UNAVAILABLE"].includes(physical)) return true;
+  // A later structured existence check supersedes the historical audit.
+  if (physical === "EXISTS") return false;
+  const notes = field(record, "Notes", "notes", "approval_notes");
+  // Recognize the existing explicit audit result, not filenames, vague mentions
+  // of errors, or the absence of a file in an unrelated library inventory.
+  return /V6 AUDIT \d{4}-\d{2}-\d{2}: exact Drive ID returned 404\s*\/\s*NOT_FOUND\./i.test(notes);
 }
 
 function isVerifiedApproval(record: UnknownRecord): boolean {
@@ -890,18 +901,7 @@ function resolveSubjectAuthority(
   const candidates = collectRecords(snapshot)
     .filter(({ record }) => isUsableStatus(record) && !isRejectedStatus(record))
     .filter(({ record }) => !isGeneratedUnpromoted(record))
-    .filter(({ record }) => matchesSubject(record, subject))
-    // P0 FIX: exclude records marked as physically unavailable/404 in Drive.
-    // If Apps Script validates availability and marks `physical_status: "NOT_FOUND"`,
-    // they are excluded here. Null/undefined physical_status = no validation info,
-    // treated as available (backward-compatible).
-    .filter(({ record }) => {
-      const status = field(record, "physical_status", "drive_status");
-      if (!status) return true; // No validation data, allow
-      return !["NOT_FOUND", "404", "BROKEN", "INACCESSIBLE"].includes(
-        String(status).toUpperCase()
-      );
-    });
+    .filter(({ record }) => matchesSubject(record, subject));
 
   const identityRecords = candidates.filter(
     ({ record }) => classifyRole(record) === "Identity Anchor"
@@ -1236,6 +1236,7 @@ export function prepareGenerationPacket(
     ...item.hairstyle_grooming_locks,
     ...item.tattoo_body_locks,
     ...collectRecords(snapshot)
+      .filter(({ record }) => !hasUnavailableReference(record))
       .filter(({ record }) => classifyRole(record) === "Detail Lock")
       .filter(({ record }) => matchesSubject(record, item.subject))
       .map(({ record, source }) => toAnchor(record, source, item.subject)),
@@ -1302,6 +1303,13 @@ export function prepareGenerationPacket(
       });
       continue;
     }
+    if (hasUnavailableReference(located.record)) {
+      blockers.push({
+        code: "MISSING_REQUIRED_REFERENCE",
+        message: `Required reference ${id} is explicitly recorded as unavailable. Revalidate its exact Drive ID before use.`,
+      });
+      continue;
+    }
     const subjects = recordSubjects(located.record);
     pushUnique(
       requiredAnchors,
@@ -1310,7 +1318,7 @@ export function prepareGenerationPacket(
   }
   for (const id of mentionedIds) {
     const located = findLocated(snapshot, id);
-    if (!located) {
+    if (!located || hasUnavailableReference(located.record)) {
       warnings.push({
         code: "REFERENCE_CONTEXT_UNAVAILABLE",
         message: `Context reference ${id} was mentioned but is unavailable; generation will continue without inventing or attaching it.`,

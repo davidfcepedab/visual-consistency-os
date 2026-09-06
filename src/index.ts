@@ -301,7 +301,7 @@ function createServer(): McpServer {
     {
       title: "List visual library inventory",
       description:
-        "Read-only, paginated inventory of exact Drive file IDs from the Visual OS Inbox and organized library. It does not classify identity or move files.",
+        "Read-only, paginated inventory of exact Drive file IDs from the Visual OS Inbox, organized library and Reference Packs. Use force_refresh=true without a cursor after direct Drive edits. It does not classify identity or move files.",
       inputSchema: ListLibraryInventoryInputSchema.shape,
       annotations: {
         readOnlyHint: true,
@@ -319,7 +319,7 @@ function createServer(): McpServer {
     {
       title: "Plan visual library reconciliation",
       description:
-        "Produces a deterministic dry-run plan for missing registrations, incomplete traceability, state conflicts, unavailable references, and duplicate-name candidates. Requires dry_run=true and always performs zero writes.",
+        "Produces a deterministic dry-run plan for missing registrations, incomplete traceability, state conflicts, unavailable references, and duplicate-name candidates. Requires dry_run=true and always performs zero writes. Use force_refresh=true without a cursor after direct Drive edits; paginate the returned scan without refreshing.",
       inputSchema: PlanLibraryReconciliationInputSchema.shape,
       annotations: {
         readOnlyHint: true,
