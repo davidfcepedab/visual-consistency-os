@@ -204,7 +204,10 @@ function createServer(): McpServer {
   );
   const libraryMutationHandlers = createLibraryMutationHandlers({
     read: appsScriptSafeReadGet,
-    write: appsScriptPost,
+    // The reconciliation protocol intentionally probes the durable
+    // idempotency ledger first. A first execution returns a structured
+    // NOT_FOUND and must reach the handler so it can continue to planning.
+    write: appsScriptPostPreservingBackendErrors,
   });
   const prepareGenerationHandlers = createPrepareGenerationHandlers({
     read: appsScriptSafeReadGet,
@@ -544,6 +547,19 @@ async function appsScriptGet(
 }
 
 async function appsScriptPost(payload: Record<string, unknown>): Promise<unknown> {
+  return appsScriptPostWithPolicy(payload, true);
+}
+
+async function appsScriptPostPreservingBackendErrors(
+  payload: Record<string, unknown>
+): Promise<unknown> {
+  return appsScriptPostWithPolicy(payload, false);
+}
+
+async function appsScriptPostWithPolicy(
+  payload: Record<string, unknown>,
+  throwOnBackendError: boolean
+): Promise<unknown> {
   const url = new URL(WEB_APP_URL);
   url.searchParams.set("secret", SHARED_SECRET);
 
@@ -557,10 +573,13 @@ async function appsScriptPost(payload: Record<string, unknown>): Promise<unknown
     signal: AbortSignal.timeout(60_000),
   });
 
-  return parseResponse(response);
+  return parseResponse(response, throwOnBackendError);
 }
 
-async function parseResponse(response: globalThis.Response): Promise<unknown> {
+async function parseResponse(
+  response: globalThis.Response,
+  throwOnBackendError = true
+): Promise<unknown> {
   const text = await response.text();
 
   let parsed: unknown;
@@ -577,6 +596,7 @@ async function parseResponse(response: globalThis.Response): Promise<unknown> {
   }
 
   if (
+    throwOnBackendError &&
     typeof parsed === "object" &&
     parsed !== null &&
     "ok" in parsed &&

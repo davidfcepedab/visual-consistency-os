@@ -472,3 +472,16 @@ test("the ten production tools remain registered", async () => {
   }
   assert.equal(registered.length, 17);
 });
+
+test("library reconciliation preserves structured idempotency lookup errors", async () => {
+  const source = await readFile("src/index.ts", "utf8");
+  assert.match(
+    source,
+    /createLibraryMutationHandlers\(\{[\s\S]*?write:\s*appsScriptPostPreservingBackendErrors/
+  );
+  assert.match(
+    source,
+    /appsScriptPostPreservingBackendErrors[\s\S]*?appsScriptPostWithPolicy\(payload, false\)/
+  );
+  assert.match(source, /throwOnBackendError\s*&&[\s\S]*?"ok" in parsed/);
+});
