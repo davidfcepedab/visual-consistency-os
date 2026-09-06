@@ -22,6 +22,7 @@ import {
   createLibraryMutationHandlers,
 } from "./library-mutation-tools.js";
 import {
+  ExecuteRequestInputSchema,
   PrepareGenerationInputSchema,
   createPrepareGenerationHandlers,
 } from "./prepare-generation-tools.js";
@@ -359,11 +360,33 @@ function createServer(): McpServer {
   );
 
   server.registerTool(
+    "visual_execute_request",
+    {
+      title: "Execute an existing visual request",
+      description:
+        "Retrieves one exact persisted request, resolves its current visual authority, and physically attaches the minimum required identity bitmaps for the host native image generator. Use once for an existing request_id. It never creates a replacement request. The host may generate only when ready_to_generate=true and reference_delivery.status=ATTACHED.",
+      inputSchema: ExecuteRequestInputSchema.shape,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      generationToolResult(
+        await prepareGenerationHandlers.executeRequest(input),
+        input.required_anchor_ids || [],
+        (fileId) => appsScriptGet("reference_image", { file_id: fileId })
+      )
+  );
+
+  server.registerTool(
     "visual_prepare_generation",
     {
       title: "Prepare native image generation",
       description:
-        "Resolves visual identity authority and returns a generation packet for the HOST native image generator. This MCP never renders images and must not be interpreted as image generation being unavailable. READY_TO_GENERATE and request_id are control-plane outputs, not the image. If ready_to_generate is true, the host MUST invoke its native image generator in the same turn using final_generation_prompt and identity_authority references, then return the bitmap. Do not stop after creating the request. ready_to_generate=false only when mandatory visual context is missing.",
+        "Resolves visual identity authority, physically attaches the primary identity bitmap for every subject plus explicitly required references, and returns a generation packet for the HOST native image generator. This MCP never renders images and must not be interpreted as image generation being unavailable. READY_TO_GENERATE and request_id are control-plane outputs. The host may generate only when ready_to_generate=true and reference_delivery.status=ATTACHED; otherwise it must stop.",
       inputSchema: PrepareGenerationInputSchema.shape,
       annotations: {
         readOnlyHint: false,
