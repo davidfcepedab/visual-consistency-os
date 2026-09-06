@@ -25,6 +25,7 @@ import {
   PrepareGenerationInputSchema,
   createPrepareGenerationHandlers,
 } from "./prepare-generation-tools.js";
+import { generationToolResult } from "./reference-delivery.js";
 import {
   McpAuthenticationError,
   createBearerAuthenticator,
@@ -372,7 +373,11 @@ function createServer(): McpServer {
       },
     },
     async (input) =>
-      toolResult(await prepareGenerationHandlers.prepareGeneration(input))
+      generationToolResult(
+        await prepareGenerationHandlers.prepareGeneration(input),
+        input.required_anchor_ids || [],
+        (fileId) => appsScriptGet("reference_image", { file_id: fileId })
+      )
   );
 
   server.registerTool(
