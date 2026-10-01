@@ -2,7 +2,7 @@
 
 Remote MCP server for the Visual Identity OS control plane.
 
-Current candidate version: `1.5.1` with 17 registered tools and two focused
+Current candidate version: `1.6.2` with 18 registered tools and two focused
 agent skills.
 
 This branch is the controlled integration line based on the source that
@@ -59,6 +59,27 @@ appending provenance to an exact current human APPROVED/REJECTED decision. It
 requires dry-run, idempotency, expected revision, actor, reason and source
 evidence, and never moves, renames, deletes, verifies identity or promotes an
 asset.
+
+Version 1.6.2 keeps the normal-chat execution route and makes balanced economy mode the
+default:
+
+- `visual_execute_request`
+
+`credit_mode=ECONOMY` performs one request resolution, attaches only the
+mandatory primary identity anchors, emits a compact handoff packet, and allows
+exactly one native generation with no automatic retry. `QUALITY` remains an
+explicit opt-in for optional detail, room, composition, lighting, and mood
+references.
+
+It accepts an exact persisted `request_id`, recovers the stored prompt and
+scene, resolves the same Priority 0/anchor/lock preflight, and reuses the
+original request rather than creating a duplicate. Ready packets physically
+attach the minimum primary set in economy mode or up to six verified Drive
+image references in quality mode as MCP image content. A
+missing primary identity attachment changes the packet to
+`ready_to_generate=false`; URL-only generation is not allowed. The server also
+advertises the `direct-visual-identity` skill and instructs ChatGPT to invoke
+native image generation in the same turn and return exactly one bitmap.
 
 ## Agent skills
 

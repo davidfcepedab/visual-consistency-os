@@ -311,6 +311,67 @@ test("Test D — missing required reference does not invent one or mark ready", 
   assert.equal(writes.length, 0);
 });
 
+test("an unavailable ID mentioned only as context warns but does not block", async () => {
+  const result = await handlersFor(authoritySnapshot()).prepareGeneration({
+    project: "TEST-NATIVE-HANDOFF",
+    subjects: ["David"],
+    user_instruction:
+      "Create a portrait inspired by historical request REQ-DOES-NOT-EXIST.",
+    generator: "CHATGPT_IMAGE",
+    trace_id: "trace-context-id-warning",
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.ready_to_generate, true);
+  assert.equal(result.blockers.length, 0);
+  assert.ok(
+    result.warnings.some(
+      (warning) => warning.code === "REFERENCE_CONTEXT_UNAVAILABLE"
+    )
+  );
+});
+
+test("a verified primary identity anchor is a non-blocking Priority 0 fallback", () => {
+  const snapshot = authoritySnapshot();
+  snapshot.asset_registry = snapshot.asset_registry.map((record) =>
+    record.asset_id === "AST-DAVID-P0"
+      ? {
+          ...record,
+          asset_id: "AST-DAVID-APPROVED",
+          status: "APPROVED",
+          source_file_id: "FILE-DAVID-APPROVED",
+          file_name: "DAVID_APPROVED_IDENTITY.png",
+          notes: "Approved identity anchor",
+        }
+      : record
+  );
+  snapshot.asset_index = [];
+  const packet = prepareGenerationPacket(
+    {
+      project: "TEST-BALANCED-GATE",
+      subjects: ["David"],
+      user_instruction: "Create one portrait using Priority 0 identity.",
+      scene: "",
+      generator: "CHATGPT_IMAGE",
+      mode: "GENERATE",
+      base_capture_id: "",
+      parent_request_id: "",
+      source_result_id: "",
+      iteration: 1,
+      trace_id: "trace-priority-fallback",
+    },
+    snapshot,
+    "trace-priority-fallback"
+  );
+  assert.equal(packet.ready_to_generate, true);
+  assert.ok(
+    packet.warnings.some((warning) => warning.code === "PRIORITY_0_FALLBACK")
+  );
+  assert.ok(
+    !packet.blockers.some((blocker) => blocker.code === "MISSING_PRIORITY_0")
+  );
+});
+
 test("missing David identity authority is not ready and does not invent a reference", () => {
   const packet = prepareGenerationPacket(
     {
@@ -420,6 +481,67 @@ test("idempotent prepare reuses an existing request for the same trace_id", asyn
   if (!result.ok) return;
   assert.equal(result.ready_to_generate, true);
   assert.equal(result.request_id, "REQ-EXISTING");
+  assert.equal(writes.length, 0);
+});
+
+test("existing request execution recovers its persisted prompt without creating a duplicate", async () => {
+  const writes: Record<string, unknown>[] = [];
+  const snapshot = authoritySnapshot();
+  snapshot.requests.push({
+    request_id: "REQ-ORVITA-001",
+    status: "REQUEST_CREATED",
+    project: "ORVITA-MARCA",
+    subjects: "David",
+    scene: "Quiet morning by the Bogotá window.",
+    mode: "EDITORIAL_GENERATION",
+    mechanism: "OTHER",
+    iteration: 1,
+    prompt: "Create exactly one photorealistic portrait of David by a Bogotá window.",
+  });
+
+  const result = await handlersFor(snapshot, writes).executeRequest({
+    request_id: "REQ-ORVITA-001",
+    generator: "CHATGPT_IMAGE",
+    trace_id: "trace-execute-existing",
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.ready_to_generate, true);
+  assert.equal(result.request_id, "REQ-ORVITA-001");
+  assert.equal(result.project, "ORVITA-MARCA");
+  assert.deepEqual(result.subjects, ["David"]);
+  assert.match(result.final_generation_prompt, /photorealistic portrait of David/);
+  assert.doesNotMatch(result.final_generation_prompt, /execute request REQ-ORVITA-001/i);
+  assert.equal(result.host_handoff.action, "INVOKE_NATIVE_IMAGE_GENERATOR");
+  assert.equal(writes.length, 0);
+});
+
+test("existing request execution rejects missing and cancelled requests without writing", async () => {
+  const writes: Record<string, unknown>[] = [];
+  const snapshot = authoritySnapshot();
+  snapshot.requests.push({
+    request_id: "REQ-CANCELLED-001",
+    status: "CANCELLED",
+    project: "ORVITA-MARCA",
+    subjects: "David",
+    prompt: "Create one portrait.",
+  });
+  const handlers = handlersFor(snapshot, writes);
+
+  const missing = await handlers.executeRequest({
+    request_id: "REQ-MISSING",
+    trace_id: "trace-execute-missing",
+  });
+  assert.equal(missing.ok, false);
+  if (!missing.ok) assert.equal(missing.error.code, "NOT_FOUND");
+
+  const cancelled = await handlers.executeRequest({
+    request_id: "REQ-CANCELLED-001",
+    trace_id: "trace-execute-cancelled",
+  });
+  assert.equal(cancelled.ok, false);
+  if (!cancelled.ok) assert.equal(cancelled.error.code, "CONFLICT");
   assert.equal(writes.length, 0);
 });
 

@@ -9,8 +9,10 @@ import { assertRuntimeSecurity } from "./contracts.js";
 import { DetectOrphanCapturesInputSchema, GetCaptureInputSchema, ListBatchesByProjectInputSchema, createSafeReadHandlers, } from "./safe-read-tools.js";
 import { ListLibraryInventoryInputSchema, PlanLibraryReconciliationInputSchema, createLibraryMaintenanceHandlers, } from "./library-maintenance-tools.js";
 import { ApplyLibraryReconciliationInputSchema, createLibraryMutationHandlers, } from "./library-mutation-tools.js";
-import { PrepareGenerationInputSchema, createPrepareGenerationHandlers, } from "./prepare-generation-tools.js";
+import { ExecuteRequestInputSchema, PrepareGenerationInputSchema, createPrepareGenerationHandlers, } from "./prepare-generation-tools.js";
 import { McpAuthenticationError, createBearerAuthenticator, createOAuthAuthorizationRedirectUrl, createOAuthAuthorizationServerMetadata, createOAuthResourceMetadata, oauthResourceMetadataUrl, readOAuthConfiguration, } from "./mcp-auth.js";
+import { registerPluginSkills } from "./plugin-skills.js";
+import { deliverGenerationReferences, } from "./reference-delivery.js";
 const PORT = Number(process.env.PORT || 8080);
 const WEB_APP_URL = requireEnv("VISUAL_OS_WEB_APP_URL");
 const SHARED_SECRET = requireEnv("VISUAL_OS_SHARED_SECRET");
@@ -24,6 +26,15 @@ const authenticateBearer = createBearerAuthenticator({
     apiKey: MCP_API_KEY,
     oauth: OAUTH,
 });
+const GENERATION_ROUTING_INSTRUCTIONS = [
+    "For a new image request that does not include an existing request_id, call visual_prepare_generation with the requested project, subjects, scene, and instruction.",
+    "For an existing Visual Identity OS request, call visual_execute_request exactly once with the exact request_id and credit_mode=ECONOMY unless the user explicitly requests maximum quality.",
+    "Never call visual_execute_request for a new scene or invent a request_id.",
+    "Both generation tools resolve authority and return authorized references as MCP image content blocks; a filename, Drive URL, or text-only record is not an attached reference.",
+    "If reference_delivery.status=ATTACHED and ready_to_generate=true, immediately invoke the host native image generator once in the same turn with final_generation_prompt and the returned image blocks, then return exactly one bitmap.",
+    "Never make exploratory MCP calls first, retry generation automatically, or stop at READY_TO_GENERATE.",
+    "visual_create_request only records work and never renders. Never promote or approve an asset automatically.",
+].join(" ");
 const appsScriptSafeReadGet = createAppsScriptReadClient({
     webAppUrl: WEB_APP_URL,
     sharedSecret: SHARED_SECRET,
@@ -36,7 +47,7 @@ app.get("/health", (_req, res) => {
     res.status(200).json({
         ok: true,
         service: "visual-identity-os-mcp",
-        version: "1.5.3",
+        version: "1.6.2",
     });
 });
 if (OAUTH) {
@@ -131,7 +142,14 @@ app.all("/mcp", async (req, res) => {
 function createServer() {
     const server = new McpServer({
         name: "visual-identity-os",
-        version: "1.5.3",
+        version: "1.6.2",
+    }, {
+        capabilities: {
+            extensions: {
+                "io.modelcontextprotocol/skills": {},
+            },
+        },
+        instructions: GENERATION_ROUTING_INSTRUCTIONS,
     });
     const safeReadHandlers = createSafeReadHandlers(appsScriptSafeReadGet);
     const libraryMaintenanceHandlers = createLibraryMaintenanceHandlers(appsScriptSafeReadGet);
@@ -143,6 +161,7 @@ function createServer() {
         read: appsScriptSafeReadGet,
         write: appsScriptPost,
     });
+    registerPluginSkills(server);
     server.registerTool("visual_get_system_status", {
         title: "Get Visual OS status",
         description: "Returns counts and operational status from the Visual Identity OS control sheet.",
@@ -215,9 +234,20 @@ function createServer() {
             openWorldHint: false,
         },
     }, async (input) => toolResult(await libraryMutationHandlers.applyLibraryReconciliation(input)));
+    server.registerTool("visual_execute_request", {
+        title: "Generate image from an existing visual request",
+        description: "Existing-request route only. Use this exactly once when the user provides a real Visual Identity OS request_id. Do not use it for a new scene and never invent a request_id; use visual_prepare_generation instead. It retrieves the persisted request, resolves Priority 0, anchors, and locks, and attaches verified references as MCP image content blocks. credit_mode defaults to ECONOMY: it sends only the minimum primary identity anchors, uses a compact response, and forbids exploratory calls or automatic retries. Use QUALITY only when explicitly requested. If reference_delivery.status is ATTACHED and ready_to_generate is true, immediately invoke the host native image generator once and return exactly one bitmap.",
+        inputSchema: ExecuteRequestInputSchema.shape,
+        annotations: {
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+        },
+    }, async (input) => generationToolResult(await prepareGenerationHandlers.executeRequest(input), input.credit_mode));
     server.registerTool("visual_prepare_generation", {
-        title: "Prepare native image generation",
-        description: "Resolves visual identity authority and returns a generation packet for the HOST native image generator. This MCP never renders images and must not be interpreted as image generation being unavailable. READY_TO_GENERATE and request_id are control-plane outputs, not the image. If ready_to_generate is true, the host MUST invoke its native image generator in the same turn using final_generation_prompt and identity_authority references, then return the bitmap. Do not stop after creating the request. ready_to_generate=false only when mandatory visual context is missing.",
+        title: "Generate a new image with authorized references",
+        description: "Primary route for every new image or scene request without an existing request_id. Resolves Priority 0 and applicable identity/detail locks, physically attaches the minimum primary identity bitmaps in ECONOMY mode, and returns the generation packet for the host native image generator. Contextual IDs and optional scene references may warn without blocking; explicitly required references remain hard gates. A filename, Drive URL, or text-only record is not an attachment. This MCP never renders images and must not be interpreted as image generation being unavailable. READY_TO_GENERATE and request_id are control-plane outputs, not the final image. If reference_delivery.status is ATTACHED and ready_to_generate is true, the host MUST invoke its native image generator once in the same turn using final_generation_prompt and the returned image blocks, then return exactly one bitmap. Do not stop at READY_TO_GENERATE or request_id. ready_to_generate=false only when mandatory identity/edit context or physical primary reference delivery is missing.",
         inputSchema: PrepareGenerationInputSchema.shape,
         annotations: {
             readOnlyHint: false,
@@ -225,7 +255,7 @@ function createServer() {
             idempotentHint: false,
             openWorldHint: false,
         },
-    }, async (input) => toolResult(await prepareGenerationHandlers.prepareGeneration(input)));
+    }, async (input) => generationToolResult(await prepareGenerationHandlers.prepareGeneration(input)));
     server.registerTool("visual_create_session", {
         title: "Create visual session",
         description: "Creates an active visual session for rapid exploration without requiring a formal request per image.",
@@ -387,6 +417,59 @@ function toolResult(value) {
         structuredContent: typeof value === "object" && value !== null
             ? value
             : { value },
+    };
+}
+async function generationToolResult(value, creditMode = "ECONOMY") {
+    if (typeof value !== "object" ||
+        value === null ||
+        !("ok" in value) ||
+        value.ok !== true ||
+        !("reference_files" in value)) {
+        return toolResult(value);
+    }
+    const delivered = await deliverGenerationReferences(value, fetch, creditMode);
+    const output = creditMode === "ECONOMY"
+        ? compactGenerationPacket(delivered.packet)
+        : delivered.packet;
+    return {
+        structuredContent: output,
+        content: [
+            {
+                type: "text",
+                text: JSON.stringify(output),
+            },
+            ...delivered.images.map(referenceImageContent),
+        ],
+    };
+}
+function compactGenerationPacket(packet) {
+    return {
+        ok: packet.ok,
+        request_id: packet.request_id,
+        trace_id: packet.trace_id,
+        project: packet.project,
+        subjects: packet.subjects,
+        mode: packet.mode,
+        ready_to_generate: packet.ready_to_generate,
+        final_generation_prompt: packet.final_generation_prompt,
+        blockers: packet.blockers,
+        identity_anchors: packet.identity_authority.map((authority) => ({
+            subject: authority.subject,
+            file_id: authority.primary_identity_anchor?.file_id || "",
+            asset_id: authority.primary_identity_anchor?.asset_id || "",
+        })),
+        reference_delivery: packet.reference_delivery,
+        host_handoff: packet.host_handoff,
+        credit_mode: "ECONOMY",
+        generation_limit: 1,
+        automatic_retry: false,
+    };
+}
+function referenceImageContent(reference) {
+    return {
+        type: "image",
+        data: reference.data,
+        mimeType: reference.mime_type,
     };
 }
 function requireEnv(name) {

@@ -427,7 +427,7 @@ test("Apps Script errors are returned safely without leaking details", async () 
   assert.equal(result.ok ? undefined : result.error.code, "BACKEND_ERROR");
 });
 
-test("the ten production tools remain registered", async () => {
+test("the production tool catalog remains compatible and includes request execution", async () => {
   const source = await readFile(
     "src/index.ts",
     "utf8"
@@ -466,9 +466,26 @@ test("the ten production tools remain registered", async () => {
     "visual_list_library_inventory",
     "visual_plan_library_reconciliation",
     "visual_apply_library_reconciliation",
+    "visual_execute_request",
     "visual_prepare_generation",
   ]) {
     assert.equal(registered.includes(tool), true, `${tool} must be registered`);
   }
-  assert.equal(registered.length, 17);
+  assert.equal(registered.length, 18);
+});
+
+test("server instructions route new and existing generation without URL-only references", async () => {
+  const source = await readFile("src/index.ts", "utf8");
+
+  assert.match(
+    source,
+    /new image request that does not include an existing request_id, call visual_prepare_generation/
+  );
+  assert.match(
+    source,
+    /Never call visual_execute_request for a new scene or invent a request_id/
+  );
+  assert.match(source, /reference_delivery\.status=ATTACHED/);
+  assert.match(source, /MCP image content blocks/);
+  assert.match(source, /filename, Drive URL, or text-only record is not an attached reference/);
 });
