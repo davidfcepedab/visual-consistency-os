@@ -314,6 +314,15 @@ function isCoupleRecord(record: UnknownRecord): boolean {
 }
 
 function classifyRole(record: UnknownRecord): string {
+  // Declared scope wins over P0/folder/filename words. Body support cannot
+  // become facial identity merely because it belongs to a Priority 0 pack.
+  const scope = field(record, "scope", "anchor_type", "role", "Type")
+    .toUpperCase().replace(/[\s/-]+/g, "_");
+  if (["BODY_SUPPORT", "BODY_ANCHOR"].includes(scope)) return "Body Anchor";
+  if (["FACIAL_IDENTITY_SUPPORT", "FACIAL_IDENTITY_ANCHOR"].includes(scope)) {
+    return "Identity Anchor";
+  }
+  if (["SUPPORT", "SUPPORT_ONLY"].includes(scope)) return "Support";
   const blob = blobFor(record);
   if (/couple|relationship/.test(blob)) return "Couple Relationship Anchor";
   // Identity must win over room/location keywords in notes or folders.
@@ -408,6 +417,16 @@ function hasUnavailableReference(record: UnknownRecord): boolean {
 }
 
 function isVerifiedApproval(record: UnknownRecord): boolean {
+  // Human approval and verified provenance are separate facts. An explicit
+  // pending provenance state must not be overridden by approved_by or Status.
+  const provenance = field(record, "provenance_state", "provenance").toUpperCase();
+  if (["UNVERIFIED", "UNKNOWN", "NEEDS_REVIEW", "CANDIDATE", "NOT_VERIFIED"].includes(provenance)) {
+    return false;
+  }
+  return hasHumanApproval(record);
+}
+
+function hasHumanApproval(record: UnknownRecord): boolean {
   const approval = field(record, "human_anchor_approval").toUpperCase();
   if (["APPROVED", "TRUE", "YES"].includes(approval)) return true;
   if (field(record, "approved_by")) return true;
@@ -433,7 +452,7 @@ function isRejectedStatus(record: UnknownRecord): boolean {
 function isGeneratedUnpromoted(record: UnknownRecord): boolean {
   const role = classifyRole(record);
   const generated = /generated|golden support|not identity/.test(blobFor(record));
-  return generated && role !== "Identity Anchor";
+  return generated && role !== "Identity Anchor" && !hasHumanApproval(record);
 }
 
 function toAnchor(
@@ -489,10 +508,23 @@ function matchesSubject(record: UnknownRecord, subject: string): boolean {
   return nameTokens(name).includes(needle);
 }
 
+function physicalFileId(record: UnknownRecord): string {
+  return driveIdFrom(field(record, "source_file_id", "file_id", "Drive Link", "drive_url"));
+}
+
+function inactiveFileIds(snapshot: GenerationContextSnapshot): Set<string> {
+  return new Set(
+    [...snapshot.asset_registry, ...snapshot.asset_index]
+      .filter((record) => /^(SUPERSEDED|ARCHIVED|REJECTED)(?:_|$)/.test(statusOf(record)))
+      .map(physicalFileId).filter(Boolean)
+  );
+}
+
 function collectRecords(snapshot: GenerationContextSnapshot): Array<{
   record: UnknownRecord;
   source: VisualAnchor["source"];
 }> {
+  const inactive = inactiveFileIds(snapshot);
   return [
     ...snapshot.asset_registry.map((record) => ({
       record,
@@ -502,7 +534,7 @@ function collectRecords(snapshot: GenerationContextSnapshot): Array<{
       record,
       source: "ASSET_INDEX" as const,
     })),
-  ];
+  ].filter(({ record }) => !inactive.has(physicalFileId(record)));
 }
 
 type LocatedRecord = {
@@ -527,6 +559,7 @@ function findLocated(
 ): LocatedRecord | undefined {
   const needle = id.trim();
   if (!needle) return undefined;
+  const inactive = inactiveFileIds(snapshot);
   const pools: Array<[UnknownRecord[], VisualAnchor["source"]]> = [
     [snapshot.asset_registry, "ASSET_REGISTRY"],
     [snapshot.asset_index, "ASSET_INDEX"],
@@ -536,7 +569,12 @@ function findLocated(
   ];
   for (const [pool, source] of pools) {
     const record = pool.find((item) => recordIds(item).includes(needle));
-    if (record) return { record, source };
+    if (record) {
+      // Explicit IDs may not bypass an exact-file supersession in the other
+      // registry. A conflicting mirror needs reconciliation before reuse.
+      if (inactive.has(physicalFileId(record))) return undefined;
+      return { record, source };
+    }
   }
   return undefined;
 }
@@ -898,10 +936,19 @@ function resolveSubjectAuthority(
 ): SubjectIdentityAuthority {
   const packKey = `ACTIVE_${subject.toUpperCase()}_MASTER_PACK_ID`;
   const masterPackId = configValue(snapshot.config, packKey);
+  const referenceVersion = configValue(
+    snapshot.config, `ACTIVE_${subject.toUpperCase()}_REFERENCE_VERSION`
+  );
   const candidates = collectRecords(snapshot)
     .filter(({ record }) => isUsableStatus(record) && !isRejectedStatus(record))
     .filter(({ record }) => !isGeneratedUnpromoted(record))
-    .filter(({ record }) => matchesSubject(record, subject));
+    .filter(({ record }) => matchesSubject(record, subject))
+    .filter(({ record }) => {
+      if (!referenceVersion) return true;
+      const role = classifyRole(record);
+      if (role !== "Identity Anchor" && role !== "Body Anchor") return true;
+      return field(record, "authority_version", "Version") === referenceVersion;
+    });
 
   const identityRecords = candidates.filter(
     ({ record }) => classifyRole(record) === "Identity Anchor"
