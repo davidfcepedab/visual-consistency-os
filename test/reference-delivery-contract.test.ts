@@ -59,3 +59,54 @@ test("blocks the handoff when any mandatory bitmap cannot be delivered", async (
   assert.equal(structured.host_handoff.action, "DO_NOT_INVOKE_GENERATOR");
   assert.equal(result.content.some((item) => item.type === "image"), false);
 });
+
+function packetWithOptional(count: number): GenerationPacket {
+  const base = packet();
+  const optional = Array.from({ length: count }, (_, i) => anchor(`FILE-OPTIONAL-${i}`));
+  return { ...base, reference_files: [...base.reference_files, ...optional] };
+}
+
+const smallImage = async (fileId: string) => ({
+  ok: true, file_id: fileId, mime_type: "image/png", data_base64: "aW1hZ2U=",
+});
+
+test("ECONOMY is the default and sends only mandatory references", async () => {
+  const result = await generationToolResult(packetWithOptional(5), [], smallImage);
+  const structured = result.structuredContent as Record<string, any>;
+  assert.equal(structured.reference_delivery.mode, "ECONOMY");
+  assert.equal(structured.reference_delivery.status, "ATTACHED");
+  assert.deepEqual(structured.reference_delivery.attached, ["FILE-PRIMARY-001"]);
+  assert.deepEqual(structured.reference_delivery.optional_attached, []);
+});
+
+test("QUALITY adds verified optional references up to six in total", async () => {
+  const result = await generationToolResult(packetWithOptional(10), [], smallImage, "QUALITY");
+  const structured = result.structuredContent as Record<string, any>;
+  assert.equal(structured.reference_delivery.mode, "QUALITY");
+  assert.equal(structured.reference_delivery.status, "ATTACHED");
+  assert.equal(structured.reference_delivery.count, 6);
+  assert.equal(result.content.filter((item) => item.type === "image").length, 6);
+});
+
+test("QUALITY skips optional references that exceed the byte budget", async () => {
+  const big = "A".repeat(Math.ceil((4 * 1024 * 1024 * 4) / 3)); // ~4 MB decoded
+  const result = await generationToolResult(packetWithOptional(5), [], async (fileId) => ({
+    ok: true, mime_type: "image/png",
+    data_base64: fileId === "FILE-PRIMARY-001" ? "aW1hZ2U=" : big,
+  }), "QUALITY");
+  const structured = result.structuredContent as Record<string, any>;
+  assert.equal(structured.reference_delivery.status, "ATTACHED");
+  assert.ok(structured.reference_delivery.total_bytes <= 15 * 1024 * 1024);
+  assert.ok(structured.reference_delivery.skipped.length > 0);
+});
+
+test("blocks when a mandatory reference exceeds the per-image limit", async () => {
+  const huge = "A".repeat(Math.ceil((6 * 1024 * 1024 * 4) / 3)); // ~6 MB decoded
+  const result = await generationToolResult(packet(), [], async () => ({
+    ok: true, mime_type: "image/png", data_base64: huge,
+  }));
+  const structured = result.structuredContent as Record<string, any>;
+  assert.equal(structured.ready_to_generate, false);
+  assert.equal(structured.reference_delivery.status, "BLOCKED");
+  assert.equal(structured.host_handoff.action, "DO_NOT_INVOKE_GENERATOR");
+});
