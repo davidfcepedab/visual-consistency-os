@@ -27,6 +27,7 @@ import {
   createPrepareGenerationHandlers,
 } from "./prepare-generation-tools.js";
 import { generationToolResult } from "./reference-delivery.js";
+import { registerPluginSkills } from "./plugin-skills.js";
 import {
   McpAuthenticationError,
   createBearerAuthenticator,
@@ -196,10 +197,19 @@ app.all("/mcp", async (req: Request, res: Response) => {
 });
 
 function createServer(): McpServer {
-  const server = new McpServer({
-    name: "visual-identity-os",
-    version: "1.5.3",
-  });
+  const server = new McpServer(
+    {
+      name: "visual-identity-os",
+      version: "1.6.0",
+    },
+    {
+      capabilities: {
+        extensions: {
+          "io.modelcontextprotocol/skills": {},
+        },
+      },
+    }
+  );
   const safeReadHandlers = createSafeReadHandlers(appsScriptSafeReadGet);
   const libraryMaintenanceHandlers = createLibraryMaintenanceHandlers(
     appsScriptSafeReadGet
@@ -215,6 +225,7 @@ function createServer(): McpServer {
     read: appsScriptSafeReadGet,
     write: appsScriptPost,
   });
+  registerPluginSkills(server);
 
   server.registerTool(
     "visual_get_system_status",
@@ -377,7 +388,8 @@ function createServer(): McpServer {
       generationToolResult(
         await prepareGenerationHandlers.executeRequest(input),
         input.required_anchor_ids || [],
-        (fileId) => appsScriptGet("reference_image", { file_id: fileId })
+        (fileId) => appsScriptGet("reference_image", { file_id: fileId }),
+        input.credit_mode
       )
   );
 
@@ -387,7 +399,10 @@ function createServer(): McpServer {
       title: "Prepare native image generation",
       description:
         "Resolves visual identity authority, physically attaches the primary identity bitmap for every subject plus explicitly required references, and returns a generation packet for the HOST native image generator. This MCP never renders images and must not be interpreted as image generation being unavailable. READY_TO_GENERATE and request_id are control-plane outputs. The host may generate only when ready_to_generate=true and reference_delivery.status=ATTACHED; otherwise it must stop.",
-      inputSchema: PrepareGenerationInputSchema.shape,
+      inputSchema: {
+        ...PrepareGenerationInputSchema.shape,
+        credit_mode: z.enum(["ECONOMY", "QUALITY"]).optional().default("ECONOMY"),
+      },
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -399,7 +414,8 @@ function createServer(): McpServer {
       generationToolResult(
         await prepareGenerationHandlers.prepareGeneration(input),
         input.required_anchor_ids || [],
-        (fileId) => appsScriptGet("reference_image", { file_id: fileId })
+        (fileId) => appsScriptGet("reference_image", { file_id: fileId }),
+        input.credit_mode
       )
   );
 

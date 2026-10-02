@@ -4,3 +4,7 @@ dist/
 node_modules/
 .mcp.json
 .codex/
+
+# Local secrets
+.env
+*.backup

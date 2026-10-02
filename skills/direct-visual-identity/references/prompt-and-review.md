@@ -19,6 +19,8 @@ Cambiar una dimensión principal por lote: identidad, pose/encuadre, wardrobe, l
 
 `visual_prepare_generation` prepara el paquete; el HOST renderiza en el mismo turno. `ready_to_generate=true` es el disparador del generador nativo, no el resultado final. No detenerse en `request_id` ni `READY_TO_GENERATE`. `visual_create_request` no produce bitmap. No concluir que la generación es imposible porque el MCP no tenga una tool de render. `ready_to_generate=false` solo vale cuando falta autoridad visual obligatoria.
 
+Cuando exista un `request_id`, usar una vez `visual_execute_request` con `credit_mode=ECONOMY` por defecto. Esa operación recupera el prompt y la escena persistidos en una sola resolución y entrega únicamente los anchors primarios obligatorios. No hacer lecturas exploratorias ni reintentos automáticos. Si el paquete queda listo, encadenar una sola generación nativa y devolver exactamente una imagen.
+
 ## Revisión
 
 Separar evidencia observable de inferencia. Revisar, cuando estén respaldados:
