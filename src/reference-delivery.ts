@@ -12,7 +12,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function selectReferences(packet: GenerationPacket, requiredIds: string[]): VisualAnchor[] {
+function selectReferences(
+  packet: GenerationPacket,
+  requiredIds: string[]
+): { selected: VisualAnchor[]; unresolvedRequiredIds: string[] } {
   const selected: VisualAnchor[] = [];
   const seen = new Set<string>();
   const add = (anchor: VisualAnchor | null | undefined) => {
@@ -20,9 +23,24 @@ function selectReferences(packet: GenerationPacket, requiredIds: string[]): Visu
     seen.add(anchor.file_id);
     selected.push(anchor);
   };
-  packet.identity_authority.forEach((authority) => add(authority.primary_identity_anchor));
-  requiredIds.forEach((id) => add(packet.reference_files.find((anchor) => anchor.file_id === id)));
-  return selected;
+
+  packet.identity_authority.forEach((authority) =>
+    add(authority.primary_identity_anchor)
+  );
+
+  const unresolvedRequiredIds: string[] = [];
+  for (const id of requiredIds) {
+    const anchor = packet.reference_files.find(
+      (candidate) => candidate.file_id === id || candidate.asset_id === id
+    );
+    if (!anchor?.file_id) {
+      unresolvedRequiredIds.push(id);
+      continue;
+    }
+    add(anchor);
+  }
+
+  return { selected, unresolvedRequiredIds };
 }
 
 function textContent(value: unknown) {
@@ -42,7 +60,7 @@ export async function generationToolResult(
   }
 
   const packet = value as GenerationPacket;
-  const selected = selectReferences(packet, requiredIds);
+  const { selected, unresolvedRequiredIds } = selectReferences(packet, requiredIds);
   const images: ReferenceImage[] = [];
   const failed: string[] = [];
   for (const anchor of selected) {
@@ -66,8 +84,17 @@ export async function generationToolResult(
     }
   }
 
-  if (selected.length === 0 || failed.length > 0 || images.length !== selected.length) {
-    const missing = failed.length ? failed : ["PRIMARY_IDENTITY_REFERENCE"];
+  if (
+    selected.length === 0 ||
+    unresolvedRequiredIds.length > 0 ||
+    failed.length > 0 ||
+    images.length !== selected.length
+  ) {
+    const missing = [
+      ...unresolvedRequiredIds,
+      ...failed,
+      ...(selected.length === 0 ? ["PRIMARY_IDENTITY_REFERENCE"] : []),
+    ];
     const blocked = {
       ...packet,
       ready_to_generate: false,
