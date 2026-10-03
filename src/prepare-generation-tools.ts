@@ -415,7 +415,25 @@ function isVerifiedApproval(record: UnknownRecord): boolean {
 }
 
 function isVerifiedFacialAnchor(anchor: VisualAnchor | null | undefined): boolean {
-  return Boolean(anchor && anchor.verification_status === "VERIFIED_SOURCE");
+  if (!anchor || anchor.verification_status !== "VERIFIED_SOURCE") return false;
+
+  const prohibited = foldText(anchor.prohibited_use.join(" "));
+  if (
+    /no facial primary|facial identity replacement|body support only/.test(
+      prohibited
+    )
+  ) {
+    return false;
+  }
+
+  const allowed = foldText(anchor.allowed_use.join(" "));
+  const name = foldText(anchor.file_name || "");
+  const bodyOnlyByContract =
+    /\bbody\b/.test(name) &&
+    /body support|visible proportions|body presentation/.test(allowed) &&
+    !/facial reference|visible face|face identity/.test(allowed);
+
+  return !bodyOnlyByContract;
 }
 
 function isRejectedStatus(record: UnknownRecord): boolean {
