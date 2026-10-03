@@ -59,3 +59,48 @@ test("blocks the handoff when any mandatory bitmap cannot be delivered", async (
   assert.equal(structured.host_handoff.action, "DO_NOT_INVOKE_GENERATOR");
   assert.equal(result.content.some((item) => item.type === "image"), false);
 });
+
+
+test("accepts required asset_id and attaches its physical file", async () => {
+  const p = packet();
+  const required = p.reference_files.find(
+    (item) => item.file_id === "FILE-REQUIRED-013"
+  )!;
+  const result = await generationToolResult(
+    p,
+    [required.asset_id],
+    async (fileId) => ({
+      ok: true,
+      file_id: fileId,
+      mime_type: "image/png",
+      data_base64: "aW1hZ2U=",
+    })
+  );
+  const structured = result.structuredContent as Record<string, any>;
+  assert.equal(structured.reference_delivery.status, "ATTACHED");
+  assert.deepEqual(structured.reference_delivery.attached.sort(), [
+    "FILE-PRIMARY-001",
+    "FILE-REQUIRED-013",
+  ]);
+});
+
+test("blocks when an explicitly required id cannot resolve to a physical reference", async () => {
+  const result = await generationToolResult(
+    packet(),
+    ["AST-NOT-IN-PACKET"],
+    async (fileId) => ({
+      ok: true,
+      file_id: fileId,
+      mime_type: "image/png",
+      data_base64: "aW1hZ2U=",
+    })
+  );
+  const structured = result.structuredContent as Record<string, any>;
+  assert.equal(structured.ready_to_generate, false);
+  assert.equal(structured.reference_delivery.status, "BLOCKED");
+  assert.ok(
+    structured.blockers.some((item: Record<string, any>) =>
+      String(item.message).includes("AST-NOT-IN-PACKET")
+    )
+  );
+});
