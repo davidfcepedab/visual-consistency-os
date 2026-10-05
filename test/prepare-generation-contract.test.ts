@@ -157,6 +157,81 @@ function handlersFor(snapshot: GenerationContextSnapshot, writes: Record<string,
   });
 }
 
+test("declared approved body support stays separate from facial P0 despite generated/P0 naming", async () => {
+  const snapshot = authoritySnapshot();
+  snapshot.asset_registry.unshift({
+    asset_id: "AST-DAVID-BODY-P0", subjects: "David", scope: "BODY_SUPPORT",
+    status: "PRIORITY_0_APPROVED", human_anchor_approval: "APPROVED",
+    source_file_id: "FILE-DAVID-BODY-P0", file_name: "David | P0 | Generated | Body.png",
+    provenance_state: "VERIFIED_SOURCE",
+  });
+  const result = await handlersFor(snapshot).prepareGeneration({
+    project: "TEST-SCOPE", subjects: ["David"], user_instruction: "One portrait.",
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.identity_authority[0].primary_identity_anchor?.file_id, "FILE-DAVID-P0");
+  assert.equal(result.identity_authority[0].priority_0_refs.some(a => a.file_id === "FILE-DAVID-BODY-P0"), false);
+  assert.equal(result.identity_authority[0].body_anchor?.file_id, "FILE-DAVID-BODY-P0");
+});
+
+test("explicit unverified provenance overrides approved status and actor without losing human approval", async () => {
+  const snapshot = authoritySnapshot();
+  snapshot.asset_index = [];
+  snapshot.asset_registry[0].provenance_state = "UNVERIFIED";
+  snapshot.asset_registry[0].status = "PRIORITY_0_APPROVED";
+  const writes: Record<string, unknown>[] = [];
+  const result = await handlersFor(snapshot, writes).prepareGeneration({
+    project: "TEST-PROVENANCE", subjects: ["David"], user_instruction: "One portrait.",
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.identity_authority[0].primary_identity_anchor?.verification_status, "CANDIDATE");
+  assert.equal(result.ready_to_generate, false);
+  assert.equal(writes.length, 0);
+  assert.equal(snapshot.asset_registry[0].human_anchor_approval, "APPROVED");
+});
+
+test("exact-file supersession blocks a stale approved mirror and explicit IDs", async () => {
+  const snapshot = authoritySnapshot();
+  snapshot.asset_registry[0].status = "SUPERSEDED";
+  snapshot.asset_index[0].Status = "PRIORITY_0_PRIMARY";
+  const writes: Record<string, unknown>[] = [];
+  const result = await handlersFor(snapshot, writes).prepareGeneration({
+    project: "TEST-SUPERSESSION", subjects: ["David"], user_instruction: "One portrait.",
+    required_anchor_ids: ["DAVID_PRIORITY_0_IDENTITY.png"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.identity_authority[0].primary_identity_anchor, null);
+  assert.ok(result.blockers.some(b => b.code === "MISSING_REQUIRED_REFERENCE"));
+  assert.equal(result.reference_files.some(a => a.file_id === "FILE-DAVID-P0"), false);
+  assert.equal(writes.length, 0);
+  assert.equal(snapshot.asset_index[0].Status, "PRIORITY_0_PRIMARY");
+});
+
+test("configured reference version does not fall back to older approved authority while provenance is pending", async () => {
+  const snapshot = authoritySnapshot();
+  snapshot.config.ACTIVE_DAVID_REFERENCE_VERSION = "MANUAL-NEW";
+  snapshot.asset_registry.unshift({
+    asset_id: "AST-NEW-FACE", subjects: "David", scope: "FACIAL_IDENTITY_SUPPORT",
+    status: "PRIORITY_0_APPROVED", source_file_id: "FILE-NEW-FACE",
+    authority_version: "MANUAL-NEW", human_anchor_approval: "APPROVED",
+    provenance_state: "UNVERIFIED", file_name: "David | P0 | Face.png",
+  });
+  const writes: Record<string, unknown>[] = [];
+  const result = await handlersFor(snapshot, writes).prepareGeneration({
+    project: "TEST-ACTIVE-VERSION", subjects: ["David"], user_instruction: "One portrait.",
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.identity_authority[0].primary_identity_anchor?.file_id, "FILE-NEW-FACE");
+  assert.equal(result.identity_authority[0].primary_identity_anchor?.verification_status, "CANDIDATE");
+  assert.equal(result.identity_authority[0].priority_0_refs.some(a => a.file_id === "FILE-DAVID-P0"), false);
+  assert.equal(result.ready_to_generate, false);
+  assert.equal(writes.length, 0);
+});
+
 test("historical 404 body locks are excluded even when their approval status remains active", async () => {
   const snapshot = authoritySnapshot();
   snapshot.asset_index.push({
