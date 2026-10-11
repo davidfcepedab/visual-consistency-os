@@ -571,6 +571,12 @@ function recordIds(record: UnknownRecord): string[] {
   );
 }
 
+function historicalReferenceAlias(record: UnknownRecord): string {
+  const name = field(record, "file_name", "Asset", "name", "final_filename");
+  const match = name.match(/(?:^|\|\s*)(\d{3,})(?=\.[A-Za-z0-9]+\s*$)/);
+  return match?.[1] || "";
+}
+
 function findLocated(
   snapshot: GenerationContextSnapshot,
   id: string
@@ -585,6 +591,8 @@ function findLocated(
     [snapshot.requests, "CAPTURES"],
     [snapshot.result_memory, "CAPTURES"],
   ];
+
+  // Technical IDs remain the primary lookup path.
   for (const [pool, source] of pools) {
     const record = pool.find((item) => recordIds(item).includes(needle));
     if (record) {
@@ -594,6 +602,37 @@ function findLocated(
       return { record, source };
     }
   }
+
+  // Human-facing historical reference numbers (for example "025") are
+  // accepted only when they resolve to one unique active physical file.
+  // This preserves strict provenance and never guesses between candidates.
+  if (/^\d{3,}$/.test(needle)) {
+    const matches: LocatedRecord[] = [];
+    for (const [pool, source] of pools) {
+      for (const record of pool) {
+        if (historicalReferenceAlias(record) !== needle) continue;
+        if (inactive.has(physicalFileId(record))) continue;
+        matches.push({ record, source });
+      }
+    }
+
+    const physicalIds = unique(
+      matches.map(({ record }) => physicalFileId(record)).filter(Boolean)
+    );
+    if (physicalIds.length !== 1) return undefined;
+
+    const preferred =
+      matches.find(
+        ({ record, source }) =>
+          source === "ASSET_REGISTRY" &&
+          physicalFileId(record) === physicalIds[0]
+      ) ||
+      matches.find(
+        ({ record }) => physicalFileId(record) === physicalIds[0]
+      );
+    return preferred;
+  }
+
   return undefined;
 }
 
