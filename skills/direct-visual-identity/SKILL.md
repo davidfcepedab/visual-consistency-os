@@ -3,48 +3,29 @@ name: direct-visual-identity
 description: "Dirigir generación, edición y revisión visual con el canon Visual Identity OS V6. Usar cuando se solicite construir un prompt, generar o editar una imagen, comparar identidad o continuidad, diagnosticar drift, evaluar una captura o preparar una decisión humana sobre David, Juan, Mambo, pareja, familia, lifestyle, boda, hogar o contenido editorial. Integra prompting, auditoría y compuertas de aprobación sin promover assets ni verificar rasgos automáticamente."
 ---
 
-# Direct Visual Identity
+# Direct Visual Identity — tarjeta operativa
 
-Operar una tarea visual completa sin mezclar identidad, escena y autoridad registral.
+`REFERENCE DEFINES IDENTITY. TEXT DEFINES SCENE.` Lo demás es automático.
+
+## 3 reglas fijas
+1. No generar sin `reference_delivery.status=ATTACHED` del Primary de cada sujeto.
+2. No mezclar identidades (David, Juan, Mambo independientes; Couple solo geometría).
+3. Cambiar P0, Primary o publicar exige aprobación explícita de David.
 
 ## Flujo
+1. Prompt nuevo: `visual_prepare_generation` (ECONOMY). Escenas de playa, piscina, cuerpo o tatuajes adjuntan solas las referencias de cuerpo; no hace falta `required_anchor_ids`.
+2. `request_id` existente: una sola llamada a `visual_execute_request`.
+3. Si `ready_to_generate=true`, generar una imagen en el mismo turno con `final_generation_prompt` y las imágenes adjuntas.
+4. Solo validar: `validate_only=true` (no crea request, nada que cancelar).
+5. Detalle completo de P0 solo si se pide: `verbose=true`.
 
-1. Consultar por lectura el estado y la referencia exacta necesaria. Si el MCP no está autenticado, detener cualquier afirmación sobre estado persistente.
-2. Leer [authority-and-gates.md](references/authority-and-gates.md) y asignar a cada referencia una función limitada.
-3. Elegir un modo: diseñar prompt, generar, editar, evaluar o preparar una decisión. Combinar modos solo en ese orden.
-4. Si el usuario da un `request_id` existente, llamar una sola vez `visual_execute_request` con ese ID exacto y `credit_mode=ECONOMY`, salvo que pida explícitamente máxima calidad. No hacer lecturas exploratorias previas, reconstruir la escena ni crear una solicitud duplicada. Para un prompt nuevo, llamar `visual_prepare_generation` antes de renderizar.
-5. Exigir `reference_delivery.status=ATTACHED` para toda identidad principal. Usar las imágenes adjuntas por el MCP como referencias visuales reales; una URL o nombre de archivo no cuenta como entrega física.
-6. Si `ready_to_generate=true`, invocar una sola vez en el mismo turno el generador nativo de imágenes del HOST con `final_generation_prompt` y las imágenes autorizadas adjuntas, y entregar exactamente un bitmap. No reintentar automáticamente. `request_id` y `READY_TO_GENERATE` son control-plane, no la imagen. `visual_create_request` no genera.
-7. Leer [prompt-and-review.md](references/prompt-and-review.md) para redactar o evaluar.
-8. Inspeccionar toda imagen objetivo antes de editarla o calificarla.
-9. Presentar hechos, inferencias, riesgos y máximo tres acciones.
+## Autonomía
+- Lecturas: el servidor reintenta una vez; si aún falla y `retryable=true`, reintentar una vez más y luego reportar el `cause`.
+- Sin pedir permiso: lecturas, dry-runs, validaciones, sincronizar nombres/links desde Drive (`SYNC_FILE_METADATA`).
+- Con permiso: estado, P0, Primary, aprobaciones, publicación, borrar o mover archivos.
 
-## Contrato
-
-- Aplicar `REFERENCE DEFINES IDENTITY. TEXT DEFINES SCENE.`
-- Generar una sola imagen salvo cantidad explícita. Prohibir collage, grid, split view y contact sheet.
-- Tratar nombre, carpeta, prompt, score y salida generada como insuficientes para verificar identidad.
-- No inventar ni espejar tatuajes, anillos, accesorios o anatomía.
-- No convertir una salida generada en evidencia facial, corporal o de tono de piel.
-- Marcar faltantes como `UNKNOWN` o `NEEDS_REVIEW`.
-- No aprobar, rechazar, reintentar scoring, actualizar metadata, mover archivos ni promover assets sin autorización explícita de esa acción.
-
-## Escrituras
-
-Antes de una escritura persistente:
-
-1. recuperar ID exacto y revisión vigente;
-2. separar evaluación provisional de decisión humana;
-3. mostrar acción, alcance, razón y restricciones;
-4. exigir confirmación explícita;
-5. usar dry-run, idempotencia y revisión esperada cuando existan;
-6. verificar el resultado por lectura.
-
-No combinar decisión y promoción en una sola escritura salvo autorización separada de ambas.
+## Al registrar un resultado
+`visual_submit_decision` con `reference_file_ids_used` (los file_id realmente usados) para verificar consumo.
 
 ## Entrega
-
-- Prompt: routing breve y un único bloque listo para usar.
-- Generación/edición: imagen, verificación breve y desviaciones.
-- Evaluación: máximo tres hallazgos, severidad y corrección mínima.
-- Persistencia: estado anterior/nuevo, trace ID y elementos no modificados.
+Imagen + 1–3 líneas: qué referencias se usaron y cualquier desviación.

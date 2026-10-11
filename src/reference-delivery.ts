@@ -38,6 +38,11 @@ function selectReferences(packet: GenerationPacket, requiredIds: string[]): Visu
   };
   packet.identity_authority.forEach((authority) => add(authority.primary_identity_anchor));
   requiredIds.forEach((id) => add(packet.reference_files.find((anchor) => anchor.file_id === id)));
+  // Scene-selected references (e.g. body refs for beach/pool scenes) are
+  // attached automatically; callers no longer need required_anchor_ids.
+  (packet.auto_required_file_ids || []).forEach((id) =>
+    add(packet.reference_files.find((anchor) => anchor.file_id === id))
+  );
   return selected;
 }
 

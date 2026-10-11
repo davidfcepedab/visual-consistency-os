@@ -398,7 +398,7 @@ function createServer(): McpServer {
     {
       title: "Prepare native image generation",
       description:
-        "Resolves visual identity authority, physically attaches the primary identity bitmap for every subject plus explicitly required references, and returns a generation packet for the HOST native image generator. This MCP never renders images and must not be interpreted as image generation being unavailable. READY_TO_GENERATE and request_id are control-plane outputs. The host may generate only when ready_to_generate=true and reference_delivery.status=ATTACHED; otherwise it must stop.",
+        "Resolves visual identity authority, physically attaches the primary identity bitmap for every subject plus scene-selected references (body references are added automatically for beach/pool/body scenes) and explicitly required ones, and returns a lean generation packet for the HOST native image generator. Use validate_only=true to check readiness without creating a request; verbose=true returns every approved P0. This MCP never renders images and must not be interpreted as image generation being unavailable. READY_TO_GENERATE and request_id are control-plane outputs. The host may generate only when ready_to_generate=true and reference_delivery.status=ATTACHED; otherwise it must stop.",
       inputSchema: {
         ...PrepareGenerationInputSchema.shape,
         credit_mode: z.enum(["ECONOMY", "QUALITY"]).optional().default("ECONOMY"),
@@ -581,15 +581,39 @@ async function appsScriptGet(
     url.searchParams.set(key, value);
   }
 
-  const response = await fetch(url, {
-    method: "GET",
-    redirect: "follow",
-    // Same budget as the safe-read client: large sheets (batches, captures)
-    // can exceed 60 s on Apps Script cold starts.
-    signal: AbortSignal.timeout(180_000),
-  });
+  // Reads are idempotent: retry once on timeout, network failure or an
+  // Apps Script 5xx/HTML error page before surfacing the error.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        redirect: "follow",
+        // Same budget as the safe-read client: large sheets (batches,
+        // captures) can exceed 60 s on Apps Script cold starts.
+        signal: AbortSignal.timeout(180_000),
+      });
+      return await parseResponse(response);
+    } catch (error) {
+      if (attempt >= 2 || !isRetryableReadError(error)) throw error;
+      console.error(JSON.stringify({
+        severity: "WARNING",
+        component: "apps-script-get",
+        action,
+        retry: attempt,
+        detail: error instanceof Error ? error.message.slice(0, 200) : String(error),
+      }));
+    }
+  }
+}
 
-  return parseResponse(response);
+function isRetryableReadError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.name === "TimeoutError" ||
+    error.name === "AbortError" ||
+    error.name === "TypeError" ||
+    /invalid JSON response \(5\d\d\)|HTTP 5\d\d|timeout|aborted|fetch failed/i.test(error.message)
+  );
 }
 
 async function appsScriptPost(payload: Record<string, unknown>): Promise<unknown> {

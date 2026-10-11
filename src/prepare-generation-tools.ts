@@ -25,6 +25,10 @@ export const PrepareGenerationInputSchema = z.object({
   source_result_id: z.string().trim().max(128).optional().default(""),
   iteration: z.number().int().min(1).max(999).optional().default(1),
   required_anchor_ids: z.array(z.string().trim().min(1).max(128)).max(20).optional(),
+  // Fluid mode (2026-10-11): validate without persisting a request, and keep
+  // the packet lean unless the caller explicitly asks for every P0.
+  validate_only: z.boolean().optional(),
+  verbose: z.boolean().optional(),
   trace_id: TraceIdSchema.optional(),
 });
 
@@ -60,6 +64,8 @@ export type SubjectIdentityAuthority = {
   master_pack_id: string;
   primary_identity_anchor: VisualAnchor | null;
   priority_0_refs: VisualAnchor[];
+  // Total approved P0 for the subject when the packet is lean.
+  priority_0_total?: number;
   supporting_anchors: VisualAnchor[];
   body_anchor: VisualAnchor | null;
   expression_support: VisualAnchor[];
@@ -99,7 +105,8 @@ export type GenerationWarning = {
     | "PRIORITY_0_FALLBACK"
     | "REFERENCE_CONTEXT_UNAVAILABLE"
     | "MODE_NORMALIZED"
-    | "REQUEST_CREATED";
+    | "REQUEST_CREATED"
+    | "VALIDATE_ONLY";
   message: string;
   subject?: string;
   location?: string;
@@ -165,6 +172,10 @@ export type GenerationPacket = {
   prohibited_use: string[];
   final_generation_prompt: string;
   reference_files: VisualAnchor[];
+  // Scene-selected references the delivery layer must attach in addition to
+  // the primary (e.g. body references for beach/pool/shirtless scenes).
+  auto_required_file_ids?: string[];
+  scene_profile?: "FACE" | "BODY";
   blockers: Blocker[];
   warnings: GenerationWarning[];
   auto_resolutions?: string[];
@@ -1219,14 +1230,96 @@ function buildPrompt(input: {
   return lines.join("\n");
 }
 
+const BODY_SCENE_PATTERN =
+  /\b(playa|beach|piscina|pileta|pool|swim|bano|brief|shirtless|sin camisa|torso|cuerpo|body|full body|cuerpo completo|gym|gimnasio|abs|abdomen|tatuaj|tattoo)\b/;
+const LEAN_SUPPORT_REFS = 2;
+
+export function sceneProfile(parsed: PrepareGenerationInput): "FACE" | "BODY" {
+  return BODY_SCENE_PATTERN.test(sceneHaystack(parsed)) ? "BODY" : "FACE";
+}
+
+function isBodyRecord(record: UnknownRecord): boolean {
+  const text = foldText(
+    [
+      field(record, "approval_scope", "scope", "Type"),
+      stringValue(record.allowed_use || record["Allowed Use"]),
+    ].join(" ")
+  );
+  return /body|cuerpo|proportion/.test(text);
+}
+
+function bodyReferencesFor(
+  subject: string,
+  snapshot: GenerationContextSnapshot
+): VisualAnchor[] {
+  if (subject === "Mambo") return [];
+  const anchors: VisualAnchor[] = [];
+  for (const { record, source } of collectRecords(snapshot)) {
+    if (!isUsableStatus(record) || isRejectedStatus(record)) continue;
+    if (isGeneratedUnpromoted(record) || hasUnavailableReference(record)) continue;
+    if (!matchesSubject(record, subject) || isCoupleRecord(record)) continue;
+    if (!isPriority0(record) || !isBodyRecord(record)) continue;
+    const anchor = toAnchor(record, source, subject);
+    if (anchor.verification_status !== "VERIFIED_SOURCE" || !anchor.file_id) continue;
+    pushUnique(anchors, anchor);
+  }
+  return anchors;
+}
+
+// Lean packet: primary + up to two references matching the scene, instead of
+// every approved P0. Fewer tokens and no contradictory "supporting locks".
+function leanAuthority(
+  authority: SubjectIdentityAuthority,
+  profile: "FACE" | "BODY",
+  bodyRefs: VisualAnchor[]
+): SubjectIdentityAuthority {
+  const primary = authority.primary_identity_anchor;
+  const pool = profile === "BODY"
+    ? [...bodyRefs, ...authority.priority_0_refs]
+    : authority.priority_0_refs.filter(
+        (anchor) => !/body proportions only/i.test(anchor.allowed_use.join(" "))
+      );
+  const selected: VisualAnchor[] = [];
+  if (primary) pushUnique(selected, primary);
+  for (const anchor of pool) {
+    if (selected.length >= LEAN_SUPPORT_REFS + (primary ? 1 : 0)) break;
+    pushUnique(selected, anchor);
+  }
+  return {
+    ...authority,
+    priority_0_refs: selected,
+    priority_0_total: authority.priority_0_refs.length,
+    supporting_anchors: authority.supporting_anchors.slice(0, 1),
+    expression_support: [],
+  };
+}
+
 export function prepareGenerationPacket(
   parsed: PrepareGenerationInput,
   snapshot: GenerationContextSnapshot,
   traceId: string
 ): GenerationPacket {
   const subjects = normalizeSubjects(parsed.subjects);
-  const identity = subjects.map((subject) =>
+  const profile = sceneProfile(parsed);
+  const bodyRefsBySubject = new Map(
+    subjects.map((subject) => [
+      subject,
+      profile === "BODY" ? bodyReferencesFor(subject, snapshot) : [],
+    ])
+  );
+  const fullIdentity = subjects.map((subject) =>
     resolveSubjectAuthority(subject, snapshot)
+  );
+  const identity = parsed.verbose
+    ? fullIdentity
+    : fullIdentity.map((authority) =>
+        leanAuthority(authority, profile, bodyRefsBySubject.get(authority.subject) || [])
+      );
+  const autoRequiredFileIds = unique(
+    [...bodyRefsBySubject.values()]
+      .flatMap((anchors) => anchors.slice(0, LEAN_SUPPORT_REFS))
+      .map((anchor) => anchor.file_id || "")
+      .filter(Boolean)
   );
   const relationship =
     subjects.includes("David") && subjects.includes("Juan")
@@ -1408,6 +1501,7 @@ export function prepareGenerationPacket(
         Boolean(anchor && isVerifiedFacialAnchor(anchor))
       ),
     ...identity.flatMap((item) => item.priority_0_refs),
+    ...[...bodyRefsBySubject.values()].flat(),
     ...relationship,
     ...detailLocks,
     ...location,
@@ -1440,7 +1534,7 @@ export function prepareGenerationPacket(
 
   // V6.1 Phase 1: Auto-generate request_id for GENERATE mode if not provided
   let requestId = "";
-  if (!requestId && effectiveMode === "GENERATE" && ready) {
+  if (!requestId && effectiveMode === "GENERATE" && ready && !parsed.validate_only) {
     // Generate a deterministic temporary ID; handler will replace with real ID after write
     requestId = `REQ-${traceId.replace(/[^A-Za-z0-9-]/g, '').substring(0, 40)}`;
     if (!autoResolutions.includes("REQUEST_CREATED")) {
@@ -1473,6 +1567,8 @@ export function prepareGenerationPacket(
     prohibited_use: prohibited,
     final_generation_prompt: prompt,
     reference_files: uniqueRefs,
+    ...(autoRequiredFileIds.length > 0 && { auto_required_file_ids: autoRequiredFileIds }),
+    scene_profile: profile,
     blockers,
     warnings,
     ...(autoResolutions.length > 0 && { auto_resolutions: autoResolutions }),
@@ -1668,6 +1764,19 @@ export function createPrepareGenerationHandlers(input: {
         );
         if (!packet.ready_to_generate) {
           return packet;
+        }
+        if (parsed.data.validate_only) {
+          return {
+            ...packet,
+            request_id: "",
+            warnings: [
+              ...packet.warnings,
+              {
+                code: "VALIDATE_ONLY",
+                message: "Validation only: references resolved and attached; no request was created, nothing to cancel.",
+              },
+            ],
+          };
         }
 
         const existing = requestByTrace(response.snapshot, traceId);
