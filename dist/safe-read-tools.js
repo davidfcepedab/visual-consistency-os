@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PaginationCursorSchema, TraceIdSchema, createTraceId, decodePaginationCursor, encodePaginationCursor, structuredError, } from "./contracts.js";
+import { PaginationCursorSchema, TraceIdSchema, createTraceId, decodePaginationCursor, encodePaginationCursor, structuredError, StructuredErrorCodeSchema, } from "./contracts.js";
 export const CaptureIdField = z
     .string()
     .trim()
@@ -17,6 +17,14 @@ const IsoDateField = z
 });
 export const GetCaptureInputSchema = z.object({
     capture_id: CaptureIdField,
+    trace_id: TraceIdField,
+});
+export const GetBatchInputSchema = z.object({
+    batch_id: CaptureIdField,
+    trace_id: TraceIdField,
+});
+export const GetSystemStatusInputSchema = z.object({
+    include_diagnostics: z.boolean().default(false),
     trace_id: TraceIdField,
 });
 export const DetectOrphanCapturesInputSchema = z.object({
@@ -104,7 +112,9 @@ export function classifyOrphans(snapshot) {
             !requestId ? "request_id" : "",
             !sessionId ? "session_id" : "",
         ].filter(Boolean);
-        if (missingLineage.length > 0) {
+        // Requests and sessions are alternative lineage routes. Their absence
+        // remains UNKNOWN; the presence of a session does not verify its target.
+        if (!requestId && !sessionId) {
             results.push(unknownLineage(capture, missingLineage));
         }
         if (requestId && !requestIds.has(requestId)) {
@@ -163,6 +173,24 @@ export function classifyOrphans(snapshot) {
         right.referenced_id || "",
     ].join("|")));
 }
+export function summarizeOrphans(snapshot) {
+    const items = classifyOrphans(snapshot);
+    const byCategory = {};
+    for (const item of items)
+        byCategory[item.category] = (byCategory[item.category] || 0) + 1;
+    return {
+        scope: "FULL_SOURCE_SNAPSHOT",
+        total_findings: items.length,
+        broken_references: items.filter(item => item.reference_state === "BROKEN_REFERENCE").length,
+        unknown_lineage: items.filter(item => item.reference_state === "UNKNOWN").length,
+        by_category: byCategory,
+        session_only_captures: snapshot.captures.filter(capture => !stringValue(capture.request_id) && stringValue(capture.session_id)).length,
+        session_target_verification: "NOT_VERIFIED",
+        primary_authority_verification: "NOT_VERIFIED",
+        // Missing capture_id never proves a human-approved imported asset invalid.
+        classification_policy: "UNKNOWN_IS_NOT_BROKEN;REQUEST_OR_SESSION;NO_AUTOMATIC_REPAIR",
+    };
+}
 function paginate(items, input, revision) {
     let offset = 0;
     if (input.cursor) {
@@ -210,6 +238,53 @@ function classifyHandlerError(error, traceId) {
 }
 export function createSafeReadHandlers(backend) {
     return {
+        async getSystemStatus(rawInput) {
+            const parsed = GetSystemStatusInputSchema.safeParse(rawInput);
+            const traceId = createTraceId(parsed.success ? parsed.data.trace_id : undefined);
+            if (!parsed.success)
+                return structuredError("INVALID_ARGUMENT", "Status input is invalid", traceId);
+            try {
+                const status = await backend("status", { trace_id: traceId });
+                if (!isRecord(status) || status.ok !== true)
+                    return structuredError("BACKEND_ERROR", "Status read failed", traceId, true);
+                if (!parsed.data.include_diagnostics)
+                    return { ...status, ok: true, trace_id: traceId };
+                const response = await backend("orphan_snapshot", { trace_id: traceId });
+                if (!isRecord(response) || response.ok !== true || !isRecord(response.snapshot) || !isOrphanSnapshot(response.snapshot)) {
+                    return structuredError("BACKEND_PROTOCOL_ERROR", "Invalid diagnostic snapshot", traceId);
+                }
+                return { ...status, ok: true, trace_id: traceId,
+                    diagnostics: { revision: response.snapshot.revision, ...summarizeOrphans(response.snapshot) } };
+            }
+            catch (error) {
+                return classifyHandlerError(error, traceId);
+            }
+        },
+        async getBatch(rawInput) {
+            const parsed = GetBatchInputSchema.safeParse(rawInput);
+            const traceId = createTraceId(parsed.success ? parsed.data.trace_id : undefined);
+            if (!parsed.success)
+                return structuredError("INVALID_ARGUMENT", "batch_id must be a valid exact identifier", traceId);
+            try {
+                const response = await backend("batch", { id: parsed.data.batch_id, trace_id: traceId });
+                if (!isRecord(response))
+                    return structuredError("BACKEND_PROTOCOL_ERROR", "Invalid batch response", traceId);
+                if (response.ok === false) {
+                    const error = isRecord(response.error) ? response.error : {};
+                    const code = StructuredErrorCodeSchema.safeParse(error.code);
+                    return structuredError(code.success ? code.data : "BACKEND_ERROR", "Visual OS batch lookup failed", traceId, error.retryable === true);
+                }
+                if (response.ok !== true || !isRecord(response.batch) ||
+                    stringValue(response.batch.batch_id) !== parsed.data.batch_id ||
+                    !Array.isArray(response.captures) || response.captures.some(capture => !isRecord(capture) || stringValue(capture.batch_id) !== parsed.data.batch_id)) {
+                    return structuredError("BACKEND_PROTOCOL_ERROR", "Backend did not return the exact batch and its captures", traceId);
+                }
+                return { ok: true, trace_id: traceId, batch: response.batch, captures: response.captures };
+            }
+            catch (error) {
+                return classifyHandlerError(error, traceId);
+            }
+        },
         async getCapture(rawInput) {
             const parsed = GetCaptureInputSchema.safeParse(rawInput);
             const traceId = createTraceId(parsed.success ? parsed.data.trace_id : undefined);
@@ -273,6 +348,7 @@ export function createSafeReadHandlers(backend) {
                     ok: true,
                     trace_id: traceId,
                     revision: snapshot.revision,
+                    summary: summarizeOrphans(snapshot),
                     ...page,
                 };
             }

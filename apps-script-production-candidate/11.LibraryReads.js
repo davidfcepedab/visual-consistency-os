@@ -31,8 +31,11 @@ function getLibraryMaintenanceSnapshotPageSafe_(cursorToken, requestedPageSize) 
     }
 
     const pageFiles = [];
-    while (pageFiles.length < pageSize) {
+    const deadline = Date.now() + 45000;
+    let folderSteps = 0;
+    while (pageFiles.length < pageSize && Date.now() < deadline && folderSteps < 30) {
       if (state.currentFolder) {
+        folderSteps += 1;
         advanceCurrentFolder_(state, pageFiles, pageSize);
         continue;
       }
@@ -314,9 +317,15 @@ function checkLibraryReferencesDirect_(assetRegistry, assetIndex) {
     return true;
   });
 
-  return unique.map(reference => Object.assign({}, reference, {
-    state: probeDriveFileStateSafe_(reference.file_id),
-  }));
+  // The same physical file may have rows in both registries. Probe it once
+  // without dropping either source's provenance from the result.
+  const states = {};
+  return unique.map(reference => {
+    if (!Object.prototype.hasOwnProperty.call(states, reference.file_id)) {
+      states[reference.file_id] = probeDriveFileStateSafe_(reference.file_id);
+    }
+    return Object.assign({}, reference, { state: states[reference.file_id] });
+  });
 }
 
 function probeDriveFileStateSafe_(fileId) {

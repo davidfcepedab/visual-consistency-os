@@ -5,6 +5,7 @@ import {
   createLibraryMaintenanceHandlers,
   planLibraryReconciliation,
   readFullLibrarySnapshot,
+  summarizeLibraryFindings,
   type LibraryMaintenanceSnapshot,
 } from "../src/library-maintenance-tools.js";
 
@@ -210,4 +211,32 @@ test("library protocol errors are safe and do not leak backend data", async () =
   assert.equal(result.ok, false);
   assert.equal(JSON.stringify(result).includes("secret"), false);
   assert.equal(JSON.stringify(result).includes("private"), false);
+});
+
+test("incremental library route reads exactly one page and preserves partial coverage", async () => {
+  let calls = 0;
+  const handlers = createLibraryMaintenanceHandlers(async (action, params) => {
+    calls += 1;
+    assert.equal(action, "library_snapshot");
+    assert.equal(params.cursor, "opaque-source-cursor");
+    return { ok: true, scan_id: "scan-exact", revision: "rev-exact", files: snapshot.files,
+      complete: false, next_cursor: "next-source-cursor" };
+  });
+  const result = await handlers.getLibraryScanPage({ cursor: "opaque-source-cursor", limit: 200 });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.coverage, "PARTIAL");
+  assert.equal(result.next_cursor, "next-source-cursor");
+  assert.equal(result.automatic_continuation, false);
+  assert.equal(result.write_count, 0);
+  assert.equal(calls, 1);
+});
+
+test("library summary separates counts by category, severity and unique record", () => {
+  const findings = planLibraryReconciliation(snapshot);
+  const summary = summarizeLibraryFindings(findings);
+  assert.equal(summary.total_findings, findings.length);
+  assert.equal(summary.by_category.ASSET_STATE_CONFLICT, 1);
+  assert.equal(summary.broken_drive_references, 1);
+  assert.equal(summary.unique_records < summary.total_findings, true);
 });

@@ -9,6 +9,7 @@ import {
 } from "../src/contracts.js";
 import {
   classifyOrphans,
+  summarizeOrphans,
   createSafeReadHandlers,
   type BackendReader,
   type OrphanSnapshot,
@@ -30,6 +31,53 @@ const completeSnapshot: OrphanSnapshot = {
   result_memory: [{ result_id: "MEM-001", capture_id: "CAP-001" }],
   assets: [{ asset_id: "AST-001", capture_id: "CAP-001" }],
 };
+
+test("request and session are alternative lineage routes without invented verification", () => {
+  const snapshot = { ...completeSnapshot, captures: [
+    { capture_id: "CAP-REQ", batch_id: "BAT-001", request_id: "REQ-001" },
+    { capture_id: "CAP-SES", batch_id: "BAT-001", session_id: "SES-001" },
+  ], reviews: [], result_memory: [], assets: [] };
+  assert.deepEqual(classifyOrphans(snapshot), []);
+  const summary = summarizeOrphans(snapshot);
+  assert.equal(summary.session_only_captures, 1);
+  assert.equal(summary.session_target_verification, "NOT_VERIFIED");
+});
+
+test("safe batch handler preserves NOT_FOUND and authentication errors without retries", async () => {
+  for (const code of ["NOT_FOUND", "CONFLICT", "UNAUTHORIZED"]) {
+    let calls = 0;
+    const handler = createSafeReadHandlers(async () => { calls += 1; return { ok: false, error: { code, retryable: false } }; });
+    const result = await handler.getBatch({ batch_id: "BAT-404", trace_id: "trace-batch" });
+    assert.equal(result.ok, false);
+    assert.equal(result.ok ? "" : result.error.code, code);
+    assert.equal(result.trace_id, "trace-batch");
+    assert.equal(calls, 1);
+  }
+});
+
+test("safe batch handler rejects mismatched IDs and unrelated captures", async () => {
+  for (const response of [
+    { ok: true, batch: { batch_id: "BAT-WRONG" }, captures: [] },
+    { ok: true, batch: { batch_id: "BAT-001" }, captures: [{ batch_id: "BAT-OTHER" }] },
+  ]) {
+    const result = await createSafeReadHandlers(async () => response).getBatch({ batch_id: "BAT-001" });
+    assert.equal(result.ok ? "" : result.error.code, "BACKEND_PROTOCOL_ERROR");
+  }
+});
+
+test("status diagnoses the full snapshot only when requested", async () => {
+  const actions: string[] = [];
+  const handlers = createSafeReadHandlers(async action => {
+    actions.push(action);
+    return action === "status" ? { ok: true, counts: { captures: 1 } } : { ok: true, snapshot: completeSnapshot };
+  });
+  assert.equal((await handlers.getSystemStatus({})).ok, true);
+  assert.deepEqual(actions, ["status"]);
+  const result = await handlers.getSystemStatus({ include_diagnostics: true });
+  assert.equal(result.ok, true);
+  assert.deepEqual(actions, ["status", "status", "orphan_snapshot"]);
+  assert.equal("diagnostics" in result && result.diagnostics.broken_references, 0);
+});
 
 test("visual_get_capture returns one exact capture", async () => {
   const calls: Array<{ action: string; params: Record<string, string> }> = [];
@@ -471,7 +519,9 @@ test("the ten production tools remain registered", async () => {
   ]) {
     assert.equal(registered.includes(tool), true, `${tool} must be registered`);
   }
-  assert.equal(registered.length, 18);
+  assert.equal(registered.includes("visual_get_canon_summary"), true);
+  assert.equal(registered.includes("visual_get_library_scan_page"), true);
+  assert.equal(registered.length, 20);
 });
 
 test("library reconciliation preserves structured idempotency lookup errors", async () => {

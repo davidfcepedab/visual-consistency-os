@@ -9,12 +9,15 @@ import { assertRuntimeSecurity } from "./contracts.js";
 import {
   DetectOrphanCapturesInputSchema,
   GetCaptureInputSchema,
+  GetBatchInputSchema,
+  GetSystemStatusInputSchema,
   ListBatchesByProjectInputSchema,
   createSafeReadHandlers,
 } from "./safe-read-tools.js";
 import {
   ListLibraryInventoryInputSchema,
   PlanLibraryReconciliationInputSchema,
+  GetLibraryScanPageInputSchema,
   createLibraryMaintenanceHandlers,
 } from "./library-maintenance-tools.js";
 import {
@@ -23,6 +26,7 @@ import {
 } from "./library-mutation-tools.js";
 import {
   ExecuteRequestInputSchema,
+  GetCanonSummaryInputSchema,
   PrepareGenerationInputSchema,
   createPrepareGenerationHandlers,
 } from "./prepare-generation-tools.js";
@@ -216,15 +220,40 @@ function createServer(): McpServer {
     write: appsScriptPost,
   });
 
+  server.registerTool("visual_get_library_scan_page", {
+    title: "Read one library source page",
+    description: "One read-only backend page per call, with exact coverage and source cursor. Use for large scans that exceed a host's single-call deadline. Accumulate every page of the same scan and revision; never claim complete coverage from one partial page.",
+    inputSchema: GetLibraryScanPageInputSchema.shape,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  }, async input => toolResult(await libraryMaintenanceHandlers.getLibraryScanPage(input)));
+
+  server.registerTool("visual_get_canon_summary", {
+    title: "Read canonical identity authority",
+    description: "Read-only authority resolution using the same resolver as generation. Returns exact Primary and source states; Couple has no facial authority. Creates no requests and delivers no bitmaps.",
+    inputSchema: GetCanonSummaryInputSchema.shape,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  }, async input => toolResult(await prepareGenerationHandlers.getCanonSummary(input)));
+
   server.registerTool(
     "visual_get_system_status",
     {
       title: "Get Visual OS status",
       description:
         "Returns counts and operational status from the Visual Identity OS control sheet.",
-      inputSchema: {},
+      inputSchema: GetSystemStatusInputSchema.shape,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     },
-    async () => toolResult(await appsScriptGet("status"))
+    async (input) => {
+      const status = await safeReadHandlers.getSystemStatus(input);
+      if (!status.ok || !input.include_diagnostics) return toolResult(status);
+      const canon = await prepareGenerationHandlers.getCanonSummary({
+        subjects: ["David", "Juan", "Mambo"], trace_id: status.trace_id,
+      });
+      return toolResult({ ...status,
+        diagnostic_status: canon.ok ? "COMPLETE" : "DEGRADED",
+        canon_diagnostics: canon.ok ? { revision: canon.revision, counts: canon.counts } : canon,
+      });
+    }
   );
 
   server.registerTool(
@@ -244,12 +273,10 @@ function createServer(): McpServer {
       title: "Get visual batch",
       description:
         "Returns one batch and all captures assigned to it.",
-      inputSchema: {
-        batch_id: z.string().min(1),
-      },
+      inputSchema: GetBatchInputSchema.shape,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     },
-    async ({ batch_id }) =>
-      toolResult(await appsScriptGet("batch", { id: batch_id }))
+    async (input) => toolResult(await safeReadHandlers.getBatch(input))
   );
 
   server.registerTool(

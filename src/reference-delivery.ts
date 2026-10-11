@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { GenerationPacket, VisualAnchor } from "./prepare-generation-tools.js";
 
 type ReferenceImage = {
@@ -131,6 +132,14 @@ export async function generationToolResult(
       required_count: selected.length,
       attached: images.map((image) => image.file_id),
       failed: [] as string[],
+      manifest: images.map((image, index) => ({
+        file_id: image.file_id,
+        content_index: index + 1,
+        mime_type: image.mime_type,
+        byte_length: Buffer.from(image.data_base64, "base64").length,
+        sha256: createHash("sha256").update(Buffer.from(image.data_base64, "base64")).digest("hex"),
+      })),
+      generator_consumption: "NOT_VERIFIED" as const,
     },
   };
   return {

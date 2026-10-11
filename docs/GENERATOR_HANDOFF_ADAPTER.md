@@ -1,121 +1,28 @@
-# Generator Handoff Adapter — P0 Spec
+# Native generator handoff contract
 
-## Why this lives outside the Cloud Run MCP
+The MCP resolves authority and physically delivers image content blocks. The host renders. The former statement that the MCP returns metadata only is obsolete.
 
-The MCP server (`visual_prepare_generation`) intentionally never renders an
-image and never fetches image bytes itself — confirmed by its own tests
-(`Test A — simple generation hands off to the host native renderer`) and by
-design (`host_handoff.action = "INVOKE_NATIVE_IMAGE_GENERATOR"`). The MCP's
-job stops at producing a `GenerationPacket`:
+## Gates and evidence
 
-```ts
-{
-  ready_to_generate: boolean,
-  request_id: string,
-  identity_authority: VisualAnchor[],
-  reference_files: VisualAnchor[],   // { file_id, drive_url, file_name, ... } — METADATA ONLY
-  final_generation_prompt: string,
-  blockers: Blocker[],
-  host_handoff: { action, ... }
-}
-```
+1. Invoke `visual_prepare_generation` once for a new scene, or `visual_execute_request` once for an exact existing request.
+2. Preserve the complete response before inspection. Prefer `structuredContent`; use JSON text only as a documented fallback. Check `Array.isArray(content)` before iterating. Non-JSON error text must block; it must not trigger an automatic retry or a second request.
+3. Require `ready_to_generate=true`, `reference_delivery.status=ATTACHED`, one physical image block for every attached ID, and each subject's Primary among those IDs.
+4. `src/generator-handoff.ts` implements these checks. It preserves each original image block and records its source file ID, content position, byte size and SHA-256. If the delivery includes a manifest, any mismatch blocks the handoff.
+5. Forward the actual image blocks to the host renderer. Bare filenames, Drive URLs, IDs and metadata never satisfy delivery.
+6. Record the renderer invocation separately. ATTACHED proves delivery from the MCP; it does not prove a renderer invocation or the model's internal use of an image.
 
-The **host** — the assistant runtime that called the MCP (ChatGPT, Claude,
-etc.) — is the only actor with both (a) credentials to read Drive bytes and
-(b) a connected image generator. This is correct separation of concerns: the
-MCP is a governance/resolver service, not a rendering pipeline. What was
-missing was a **documented, testable contract** for step (a)+(b), so "the
-host does it" didn't silently mean "nothing verifies it happened."
+## Native host example
 
-## The adapter contract (P0, minimal)
+In a functions host, expose each returned MCP image block using `image(block)` before invoking imagegen. When these images have no local file paths, select the smallest `num_last_images_to_include` that includes every reference. Do not display other images between delivery and selection. If the renderer cannot include all images, stop. Do not replace references with textual descriptions.
 
-```ts
-interface GeneratorAdapter {
-  name: string;                       // "gpt-image" | "krea" | "grok-imagine"
-  generate(req: GenerateRequest): Promise<GenerateResult>;
-}
+Use the returned `final_generation_prompt` and produce one image. A local-reference path is valid only when it points to the actual delivered bytes and the tool supports that path. Never fetch another file merely to substitute for an unavailable MCP bitmap.
 
-interface GenerateRequest {
-  prompt: string;                     // GenerationPacket.final_generation_prompt
-  references: ResolvedReference[];    // bytes/asset-refs already fetched, NOT bare URLs
-  aspectRatio: string;                // e.g. "4:5"
-  outputCount: 1;                     // Visual Identity OS always requests exactly 1
-}
+The manifest remains `generator_consumption=NOT_VERIFIED`. A host can independently document REFERENCE_PASSED from the actual invocation, but must not rewrite this as proof of internal model consumption. Evaluate the visible output against the visible reference and keep human approval pending.
 
-interface ResolvedReference {
-  subject_or_scope: string;           // "David" | "Juan" | "Mambo" | "SalaTV"
-  source_file_id: string;             // Drive file id, for traceability back to identity_authority
-  bytes_delivered: boolean;           // true only if the adapter actually moved bytes to the generator
-  generator_asset_ref: string;        // the generator-native handle (upload URL / attachment id)
-}
+## Scope isolation
 
-interface GenerateResult {
-  ok: boolean;
-  generation_id: string;
-  images: { url_or_path: string }[];
-  references_used: ResolvedReference[];  // must echo back which refs were actually attached
-}
-```
+Primary governs facial identity. Other P0 entries are catalog metadata until selected for the scene. Body-only prohibitions apply to the body reference, not globally to the Primary face. Required references have individually labeled allowed and prohibited uses. No generated output is promoted automatically.
 
-**Hard rule enforced by the adapter, not by convention:** any
-`GenerateRequest` where `references.length === 0` for an identity-dependent
-request must throw `BLOCKED_REFERENCE_DELIVERY` before calling the
-generator. A prompt string containing a Drive URL is **not** a reference and
-does not satisfy this check — only an entry in `references[]` with
-`bytes_delivered: true` does. If the chosen generator model rejects the
-reference count/shape (e.g. more than its max `image_urls`), the adapter
-returns `BLOCKED_GENERATOR_INCOMPATIBLE` instead of silently dropping refs.
+## Retention
 
-## Reference implementation used for the P0 end-to-end test: `GPTImageAdapter` (via Krea gateway)
-
-**Correction after inspecting the connected Krea MCP catalog**: the Krea
-public API gateway itself exposes `openai/gpt-image` ("Original ChatGPT
-image model") and `xai/grok-imagine-2` as callable models
-(`get_model_schema("openai/gpt-image")` confirms `image_urls: string[]`,
-up to 15 entries, each "external URL, base64 data URI, or uploaded asset
-URL"). This means the P0-required generators (GPT Image primary, Grok
-Imagine secondary) are reachable for real — not simulated — through the one
-generator connector available in this orchestration session, using Krea only
-as the physical gateway/upload layer, exactly as scoped ("Krea puede
-mantenerse como integración externa/experimental" — here it is the transport,
-not the creative model).
-
-### GPTImageAdapter — actual steps executed (not simulated)
-
-1. For every `reference_files[i].file_id` in the `GenerationPacket`:
-   a. `drive.download_file_content(fileId)` → base64 bytes (real Drive API
-      call, not a cached/assumed value).
-   b. `krea.get_upload_url()` → presigned URL (shared across uploads within
-      its 3h lifetime).
-   c. `POST` the decoded bytes to that URL (multipart) → Krea asset URL.
-   d. Record `{ source_file_id, generator_asset_ref: krea_asset_url,
-      bytes_delivered: true }` for every reference — this is the
-      traceability link back to `identity_authority`.
-2. Call `krea.generate_image({ model: "openai/gpt-image", input: { prompt,
-   image_urls: [...krea_asset_urls], width, height } })`.
-3. Poll `krea.get_job(jobId)` until `completed`/`failed`.
-4. Return `GenerateResult` with `references_used` echoing every asset that
-   was actually uploaded — this is what `TRACEABILITY_REPORT.md` links to
-   `capture_id`.
-
-Secondary generator (`GrokImagineAdapter`) is the same steps with
-`model: "xai/grok-imagine-2"` — same interface, swap the model id only.
-
-### Why this satisfies "physical delivery" and not "URLs passed"
-
-The `final_generation_prompt` text may still *mention* Drive URLs for human
-readability, but the generator call itself never receives that text as its
-only channel for the reference — `image_urls` in step 2 carries
-Krea-hosted copies of the actual bytes downloaded in step 1c. If step 1a
-fails (file inaccessible) or returns an unexpected MIME type, the adapter
-throws `GENERATOR_HANDOFF_INCOMPLETE` before step 2, matching the Hard
-Failure Rule.
-
-## What this fixes
-
-Before: `final_generation_prompt` contained a Drive URL as a text
-substring; nothing verified the URL resolved, nothing fetched bytes, nothing
-recorded what was actually shown to the generator. `GENERATOR_HANDOFF_REPORT.md`
-(produced after the P0 verification run) will show, for the one real
-generation executed, the exact `source_file_id → generator_asset_ref`
-mapping — i.e. proof of physical delivery, not just "URLs passed."
+Do not write Canon, P0, Locks, Result Memory or approval decisions as part of a transport test. Keep technical transport evidence and human approval separate.
