@@ -1321,10 +1321,12 @@ export function prepareGenerationPacket(
       .map((anchor) => anchor.file_id || "")
       .filter(Boolean)
   );
-  const relationship =
+  const allRelationship =
     subjects.includes("David") && subjects.includes("Juan")
       ? coupleAnchors(snapshot)
       : [];
+  // Lean: the Couple Primary plus one more geometry reference is enough.
+  const relationship = parsed.verbose ? allRelationship : allRelationship.slice(0, 2);
   const detailLocks = identity.flatMap((item) => [
     ...item.hairstyle_grooming_locks,
     ...item.tattoo_body_locks,
