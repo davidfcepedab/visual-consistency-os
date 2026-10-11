@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   createLibraryMaintenanceHandlers,
+  classifyBackendError,
   planLibraryReconciliation,
   readFullLibrarySnapshot,
   type LibraryMaintenanceSnapshot,
@@ -232,4 +233,30 @@ test("traceable P0 references with NOT_CLEARED are not publication conflicts", (
   assert.equal(conflicts.has("AST-P0-OPEN"), true, "P0 with open provenance must still conflict");
   assert.equal(conflicts.has("AST-SUPPORT"), true, "non-P0 approved assets keep the rule");
   assert.equal(conflicts.has("AST-LEGACY"), true);
+});
+
+test("backend errors are classified for diagnosis", () => {
+  const timeout = new Error("The operation was aborted due to timeout");
+  timeout.name = "TimeoutError";
+  assert.equal(classifyBackendError(timeout), "BACKEND_TIMEOUT");
+  assert.equal(classifyBackendError(new Error("LIBRARY_SCAN_REVISION_CHANGED_MID_TRAVERSAL")), "LIBRARY_SCAN_REVISION_CHANGED_MID_TRAVERSAL");
+  assert.equal(classifyBackendError(new Error("Apps Script returned an invalid JSON response (500)")), "APPS_SCRIPT_INVALID_RESPONSE");
+  assert.equal(classifyBackendError(new Error("boom")), "UPSTREAM_ERROR");
+});
+
+test("scan restarts once when the library changes mid-traversal", async () => {
+  let calls = 0;
+  const handlers = createLibraryMaintenanceHandlers(async () => {
+    calls += 1;
+    if (calls === 1) {
+      return { ...completeSnapshotResponse(snapshot), complete: false, next_cursor: "page-2" };
+    }
+    if (calls === 2) {
+      return { ...completeSnapshotResponse(snapshot), revision: "library-rev-2" };
+    }
+    return completeSnapshotResponse(snapshot);
+  });
+  const result = await handlers.planLibraryReconciliation({ dry_run: true, limit: 50, trace_id: "trace-restart" });
+  assert.equal(result.ok, true);
+  assert.equal(calls, 3, "one aborted traversal plus one clean restart");
 });

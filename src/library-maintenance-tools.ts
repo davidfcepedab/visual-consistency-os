@@ -296,7 +296,39 @@ function handlerError(error: unknown, traceId: string): StructuredErrorResponse 
   if (error instanceof Error && error.message === "INVALID_CURSOR") {
     return structuredError("INVALID_CURSOR", "Pagination cursor is invalid", traceId);
   }
-  return structuredError("BACKEND_ERROR", "Visual library backend request failed", traceId, true);
+  const cause = classifyBackendError(error);
+  console.error(JSON.stringify({
+    severity: "ERROR",
+    component: "library-maintenance",
+    trace_id: traceId,
+    cause,
+    detail: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300),
+  }));
+  return structuredError("BACKEND_ERROR", `Visual library backend request failed (${cause})`, traceId, true);
+}
+
+const SCAN_RESTARTABLE_ERRORS = new Set([
+  "LIBRARY_SCAN_REVISION_CHANGED_MID_TRAVERSAL",
+  "LIBRARY_SCAN_ID_CHANGED_MID_TRAVERSAL",
+]);
+
+const KNOWN_SCAN_ERRORS = new Set([
+  ...SCAN_RESTARTABLE_ERRORS,
+  "INVALID_LIBRARY_SNAPSHOT",
+  "LIBRARY_SCAN_INCOMPLETE_MISSING_CURSOR",
+  "LIBRARY_SCAN_DID_NOT_COMPLETE",
+]);
+
+export function classifyBackendError(error: unknown): string {
+  if (error instanceof Error) {
+    if (error.name === "TimeoutError" || error.name === "AbortError" || /timeout|aborted/i.test(error.message)) {
+      return "BACKEND_TIMEOUT";
+    }
+    if (KNOWN_SCAN_ERRORS.has(error.message)) return error.message;
+    if (/invalid JSON response/i.test(error.message)) return "APPS_SCRIPT_INVALID_RESPONSE";
+    if (/HTTP \d+/.test(error.message)) return "APPS_SCRIPT_HTTP_ERROR";
+  }
+  return "UPSTREAM_ERROR";
 }
 
 // Exhaustive, cursor-based Drive traversal: keeps calling the Apps Script
@@ -410,7 +442,14 @@ export function createLibraryMaintenanceHandlers(backend: BackendReader) {
     }
     // A failed explicit refresh must not leave an older snapshot reusable.
     cachedSnapshot = undefined;
-    cachedSnapshot = await readFullLibrarySnapshot(backend, traceId);
+    try {
+      cachedSnapshot = await readFullLibrarySnapshot(backend, traceId);
+    } catch (error) {
+      // Drive/Sheets edited while the scan was running: restart once from
+      // scratch instead of failing the whole read-only operation.
+      if (!(error instanceof Error) || !SCAN_RESTARTABLE_ERRORS.has(error.message)) throw error;
+      cachedSnapshot = await readFullLibrarySnapshot(backend, traceId);
+    }
     cachedAt = Date.now();
     return cachedSnapshot;
   }

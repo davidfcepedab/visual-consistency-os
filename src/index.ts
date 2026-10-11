@@ -584,7 +584,9 @@ async function appsScriptGet(
   const response = await fetch(url, {
     method: "GET",
     redirect: "follow",
-    signal: AbortSignal.timeout(60_000),
+    // Same budget as the safe-read client: large sheets (batches, captures)
+    // can exceed 60 s on Apps Script cold starts.
+    signal: AbortSignal.timeout(180_000),
   });
 
   return parseResponse(response);
