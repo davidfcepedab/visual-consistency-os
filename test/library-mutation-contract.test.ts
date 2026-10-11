@@ -245,3 +245,42 @@ test("server-side reconciliation contains no Drive mutation or physical deletion
     assert.equal(source.includes(forbidden), false, forbidden);
   }
 });
+
+test("SYNC_FILE_METADATA copies only Drive name/link into an existing registry row", () => {
+  const drifted: LibraryMaintenanceSnapshot = {
+    ...snapshot,
+    asset_registry: [
+      {
+        asset_id: "ASSET-DECIDED-001",
+        source_file_id: "FILE-DECIDED-001",
+        final_filename: "old-name.jpg",
+        status: "PRIORITY_0_APPROVED",
+      },
+    ],
+  };
+  const { plan, rejections } = planSafeLibraryMutations(drifted, [
+    { type: "SYNC_FILE_METADATA", file_id: "FILE-DECIDED-001" },
+    { type: "SYNC_FILE_METADATA", file_id: "FILE-CANDIDATE-001" },
+  ]);
+  assert.equal(plan.length, 1);
+  assert.equal(plan[0].operation, "UPDATE_FILE_METADATA");
+  assert.deepEqual(Object.keys(plan[0].fields).sort(), ["drive_url", "file_name", "final_filename"]);
+  assert.equal(plan[0].fields.final_filename, "decided.jpg");
+  assert.equal(plan[0].match?.asset_id, "ASSET-DECIDED-001");
+  assert.equal(rejections.length, 1, "unregistered files cannot be synced");
+});
+
+test("SYNC_FILE_METADATA is a no-op when names already match", () => {
+  const synced: LibraryMaintenanceSnapshot = {
+    ...snapshot,
+    asset_registry: [{ asset_id: "A", source_file_id: "FILE-DECIDED-001", final_filename: "decided.jpg" }],
+  };
+  const { plan } = planSafeLibraryMutations(synced, [{ type: "SYNC_FILE_METADATA", file_id: "FILE-DECIDED-001" }]);
+  assert.equal(plan[0].operation, "NOOP_ALREADY_REGISTERED");
+});
+
+test("Apps Script metadata sync is restricted to name and link columns", () => {
+  const source = readFileSync("apps-script-production-candidate/15.LibraryReconciliation.js", "utf8");
+  assert.match(source, /UPDATE_FILE_METADATA: true/);
+  assert.match(source, /LIBRARY_RECON_METADATA_FIELDS = \{\s*final_filename: true,\s*file_name: true,\s*drive_url: true,\s*\}/);
+});

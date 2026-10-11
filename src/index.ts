@@ -239,6 +239,18 @@ function createServer(): McpServer {
   );
 
   server.registerTool(
+    "visual_get_canon_summary",
+    {
+      title: "Get canon summary",
+      description:
+        "Read-only, auto-generated canon page from ASSET_REGISTRY: Primary and approved P0 per subject (David, Juan, Mambo), Couple relationship anchors and Family status. Use it instead of static pointer documents.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async () => toolResult(await prepareGenerationHandlers.canonSummary())
+  );
+
+  server.registerTool(
     "visual_list_pending_batches",
     {
       title: "List pending visual batches",
@@ -355,7 +367,7 @@ function createServer(): McpServer {
     {
       title: "Apply visual library reconciliation",
       description:
-        "Applies only deterministic, non-authoritative library reconciliation: registering an exact Drive file as a CANDIDATE/NEEDS_REVIEW row, or consolidating a file once an exact existing human APPROVE/REJECT decision already proves the destination. dry_run defaults to true and performs zero writes. A real write requires idempotency_key, expected_revision, reason, updated_by, and source_evidence, is a no-op on idempotency_key replay, appends audit provenance to the existing ASSET_REGISTRY row, and verifies by readback. It never verifies identity, face, tattoo, ring, Detail Lock, Identity Master, or Publication Ready, and never overwrites a human decision, deletes anything, or creates a new folder, sheet, or spreadsheet.",
+        "Applies only deterministic, non-authoritative library reconciliation: registering an exact Drive file as a CANDIDATE/NEEDS_REVIEW row, syncing the current Drive name/link of an already registered file (SYNC_FILE_METADATA, safe to run without a human decision), or consolidating a file once an exact existing human APPROVE/REJECT decision already proves the destination. dry_run defaults to true and performs zero writes. A real write requires idempotency_key, expected_revision, reason, updated_by, and source_evidence, is a no-op on idempotency_key replay, appends audit provenance to the existing ASSET_REGISTRY row, and verifies by readback. It never verifies identity, face, tattoo, ring, Detail Lock, Identity Master, or Publication Ready, and never overwrites a human decision, deletes anything, or creates a new folder, sheet, or spreadsheet.",
       inputSchema: ApplyLibraryReconciliationInputSchema.shape,
       annotations: {
         readOnlyHint: false,

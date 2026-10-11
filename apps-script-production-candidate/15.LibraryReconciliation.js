@@ -37,7 +37,14 @@ const LIBRARY_RECON_HUMAN_DECISION_FIELDS = {
 const LIBRARY_RECON_ALLOWED_OPERATIONS = {
   APPEND_ROW: true,
   APPEND_PROVENANCE: true,
+  UPDATE_FILE_METADATA: true,
   NOOP_ALREADY_REGISTERED: true,
+};
+// UPDATE_FILE_METADATA may only write these non-authoritative columns.
+const LIBRARY_RECON_METADATA_FIELDS = {
+  final_filename: true,
+  file_name: true,
+  drive_url: true,
 };
 const LIBRARY_RECON_IDEMPOTENCY_PREFIX = 'library-recon-idem:';
 
@@ -169,6 +176,57 @@ function applyLibraryReconciliation_(payload) {
           applied: true,
           row,
           after: rowObject_(registrySheet, row),
+        });
+        return;
+      }
+
+      if (mutation.operation === 'UPDATE_FILE_METADATA') {
+        const metaAssetId = mutation.match && mutation.match.asset_id;
+        const metaRow = metaAssetId
+          ? findRowByColumnValueSafe_(registrySheet, 'asset_id', metaAssetId)
+          : -1;
+        if (metaRow === -1) {
+          throw invalidLibraryReconArg_(`No exact ASSET_REGISTRY row for asset_id=${metaAssetId}`);
+        }
+        const metaBefore = rowObject_(registrySheet, metaRow);
+        const rowFileId = firstDriveIdSafe_([
+          metaBefore.source_file_id,
+          metaBefore.file_id,
+          metaBefore.drive_url,
+        ]);
+        if (rowFileId !== String(mutation.file_id || '').trim()) {
+          throw invalidLibraryReconArg_(
+            `asset_id=${metaAssetId} does not reference file_id=${mutation.file_id}`
+          );
+        }
+        const metaHeaders = headerMap_(registrySheet);
+        Object.keys(mutation.fields || {}).forEach(field => {
+          if (!LIBRARY_RECON_METADATA_FIELDS[field]) {
+            throw invalidLibraryReconArg_(`Field not permitted for metadata sync: ${field}`);
+          }
+          if (metaHeaders[field]) {
+            setCellByHeader_(registrySheet, metaRow, field, mutation.fields[field]);
+          }
+        });
+        const metaNotesHeader = ['approval_notes', 'notes', 'evidence'].find(name => metaHeaders[name]);
+        if (metaNotesHeader) {
+          const prior = String(metaBefore[metaNotesHeader] || '');
+          setCellByHeader_(
+            registrySheet,
+            metaRow,
+            metaNotesHeader,
+            prior ? `${prior} | ${provenanceLine}` : provenanceLine
+          );
+        }
+        writeCount += 1;
+        results.push({
+          type: mutation.type,
+          file_id: mutation.file_id,
+          operation: mutation.operation,
+          applied: true,
+          row: metaRow,
+          before: metaBefore,
+          after: rowObject_(registrySheet, metaRow),
         });
         return;
       }

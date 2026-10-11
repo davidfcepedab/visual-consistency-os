@@ -1624,11 +1624,85 @@ function requestIdFrom(value: unknown): string {
   return field(value, "request_id");
 }
 
+export type CanonSubjectSummary = {
+  subject: string;
+  primary: { file_id?: string; name?: string } | null;
+  p0: Array<{ file_id?: string; name?: string; status?: string; use: string }>;
+};
+
+export type CanonSummary = {
+  revision: string;
+  subjects: CanonSubjectSummary[];
+  couple: Array<{ file_id?: string; name?: string; status?: string }>;
+  family: "HOLD" | "ACTIVE";
+  markdown: string;
+};
+
+// Auto-generated canon page: the registry is the single source of truth,
+// so the "current state" document is derived instead of hand-maintained.
+export function buildCanonSummary(snapshot: GenerationContextSnapshot): CanonSummary {
+  const subjects = ["David", "Juan", "Mambo"].map((subject) => {
+    const authority = resolveSubjectAuthority(subject, snapshot);
+    const body = bodyReferencesFor(subject, snapshot);
+    const all: VisualAnchor[] = [];
+    if (authority.primary_identity_anchor) pushUnique(all, authority.primary_identity_anchor);
+    authority.priority_0_refs.forEach((anchor) => pushUnique(all, anchor));
+    body.forEach((anchor) => pushUnique(all, anchor));
+    return {
+      subject,
+      primary: authority.primary_identity_anchor
+        ? { file_id: authority.primary_identity_anchor.file_id, name: authority.primary_identity_anchor.file_name }
+        : null,
+      p0: all.map((anchor) => ({
+        file_id: anchor.file_id,
+        name: anchor.file_name,
+        status: anchor.status,
+        use: body.some((item) => item.file_id === anchor.file_id) ? "BODY" : "FACE",
+      })),
+    };
+  });
+  const couple = coupleAnchors(snapshot).map((anchor) => ({
+    file_id: anchor.file_id,
+    name: anchor.file_name,
+    status: anchor.status,
+  }));
+  const familyAuthority = resolveSubjectAuthority("Family", snapshot);
+  const family: CanonSummary["family"] = familyAuthority.primary_identity_anchor ? "ACTIVE" : "HOLD";
+  const lines = [
+    `# Canon VIOS (generado desde ASSET_REGISTRY, revisión ${snapshot.revision})`,
+    "",
+    ...subjects.flatMap((item) => [
+      `## ${item.subject} — P0 = ${item.p0.length}`,
+      `Primary: ${item.primary?.name || "SIN PRIMARY"} (${item.primary?.file_id || "-"})`,
+      ...item.p0.map((ref) => `- ${ref.name || ref.file_id} · ${ref.use}`),
+      "",
+    ]),
+    `## Couple — ${couple.length} anclas (solo geometría, nunca cara)`,
+    ...couple.map((ref) => `- ${ref.name || ref.file_id}`),
+    "",
+    `## Family — ${family}`,
+  ];
+  return { revision: snapshot.revision, subjects, couple, family, markdown: lines.join("\n") };
+}
+
 export function createPrepareGenerationHandlers(input: {
   read: BackendReader;
   write: BackendWriter;
 }) {
   return {
+    async canonSummary(): Promise<SafeResult<CanonSummary>> {
+      const traceId = createTraceId();
+      try {
+        const response = await input.read("generation_context", { trace_id: traceId });
+        if (!isRecord(response) || !isSnapshot(response.snapshot)) {
+          return structuredError("BACKEND_ERROR", "Visual generation context is unavailable", traceId, true);
+        }
+        return { ok: true, trace_id: traceId, ...buildCanonSummary(response.snapshot) };
+      } catch {
+        return structuredError("BACKEND_ERROR", "Canon summary failed", traceId, true);
+      }
+    },
+
     async executeRequest(
       rawInput: z.input<typeof ExecuteRequestInputSchema>
     ): Promise<SafeResult<GenerationPacket>> {

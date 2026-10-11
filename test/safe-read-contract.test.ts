@@ -468,10 +468,11 @@ test("the ten production tools remain registered", async () => {
     "visual_apply_library_reconciliation",
     "visual_execute_request",
     "visual_prepare_generation",
+    "visual_get_canon_summary",
   ]) {
     assert.equal(registered.includes(tool), true, `${tool} must be registered`);
   }
-  assert.equal(registered.length, 18);
+  assert.equal(registered.length, 19);
 });
 
 test("library reconciliation preserves structured idempotency lookup errors", async () => {

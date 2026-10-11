@@ -42,9 +42,18 @@ export const ConsolidateDecidedFileActionSchema = z.object({
   capture_id: z.string().trim().min(1).max(128),
 });
 
+// Non-authoritative: copies the current Drive name/link of an already
+// registered file into its ASSET_REGISTRY row. Never touches status,
+// approvals, scope or any identity field.
+export const SyncFileMetadataActionSchema = z.object({
+  type: z.literal("SYNC_FILE_METADATA"),
+  file_id: DriveFileIdSchema,
+});
+
 export const LibraryMutationActionSchema = z.discriminatedUnion("type", [
   RegisterCandidateActionSchema,
   ConsolidateDecidedFileActionSchema,
+  SyncFileMetadataActionSchema,
 ]);
 
 export type LibraryMutationAction = z.infer<typeof LibraryMutationActionSchema>;
@@ -79,7 +88,11 @@ export type PlannedLibraryMutation = {
   file_id: string;
   capture_id?: string;
   target: "ASSET_REGISTRY";
-  operation: "APPEND_ROW" | "APPEND_PROVENANCE" | "NOOP_ALREADY_REGISTERED";
+  operation:
+    | "APPEND_ROW"
+    | "APPEND_PROVENANCE"
+    | "UPDATE_FILE_METADATA"
+    | "NOOP_ALREADY_REGISTERED";
   match?: { asset_id: string };
   fields: UnknownRecord;
   evidence: string[];
@@ -197,6 +210,47 @@ export function planSafeLibraryMutations(
         operation: "APPEND_ROW",
         fields,
         evidence: [`scope=${file.scope}`, `path=${file.path}`],
+      });
+      continue;
+    }
+
+    if (action.type === "SYNC_FILE_METADATA") {
+      const file = filesById.get(action.file_id);
+      const existingRow = registryRowByFileId.get(action.file_id);
+      if (!file || !existingRow) {
+        rejections.push({
+          action,
+          code: "NOT_FOUND",
+          message: `File ${action.file_id} must exist in Drive and in ASSET_REGISTRY to sync metadata.`,
+        });
+        continue;
+      }
+      const recorded = stringValue(existingRow.final_filename) || stringValue(existingRow.file_name);
+      if (recorded === file.name) {
+        plan.push({
+          type: "SYNC_FILE_METADATA",
+          file_id: action.file_id,
+          target: "ASSET_REGISTRY",
+          operation: "NOOP_ALREADY_REGISTERED",
+          fields: {},
+          evidence: ["metadata already in sync"],
+        });
+        continue;
+      }
+      const fields: UnknownRecord = {
+        final_filename: file.name,
+        file_name: file.name,
+        drive_url: `https://drive.google.com/file/d/${file.file_id}/view`,
+      };
+      assertSafeFields(fields);
+      plan.push({
+        type: "SYNC_FILE_METADATA",
+        file_id: action.file_id,
+        target: "ASSET_REGISTRY",
+        operation: "UPDATE_FILE_METADATA",
+        match: { asset_id: stringValue(existingRow.asset_id) },
+        fields,
+        evidence: [`registry_name=${recorded}`, `drive_name=${file.name}`, `path=${file.path}`],
       });
       continue;
     }

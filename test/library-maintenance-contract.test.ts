@@ -260,3 +260,46 @@ test("scan restarts once when the library changes mid-traversal", async () => {
   assert.equal(result.ok, true);
   assert.equal(calls, 3, "one aborted traversal plus one clean restart");
 });
+
+test("findings are bucketed into ACTION and HISTORICAL and metadata drift is auto-applicable", () => {
+  const findings = planLibraryReconciliation({
+    ...snapshot,
+    files: [
+      ...snapshot.files,
+      { file_id: "FILE-ARCHIVED", name: "old.png", mime_type: "image/png", path: "99. Archive/2026-10 Limpieza/old.png", scope: "LIBRARY" },
+    ],
+    asset_registry: [
+      ...snapshot.asset_registry,
+      { asset_id: "AST-P0", source_file_id: "FILE-REVIEW", final_filename: "renamed-elsewhere.png", status: "PRIORITY_0_APPROVED" },
+      { asset_id: "AST-OLD", source_file_id: "FILE-GONE", status: "SUPERSEDED" },
+    ],
+    reference_checks: [
+      ...snapshot.reference_checks,
+      { file_id: "FILE-GONE", state: "NOT_FOUND", source: "ASSET_REGISTRY" },
+    ],
+  });
+  const byKey = new Map(findings.map((f) => [`${f.category}|${f.record_id}`, f]));
+  assert.equal(byKey.get("UNINDEXED_LIBRARY_FILE|FILE-ARCHIVED")?.bucket, "HISTORICAL");
+  assert.equal(byKey.get("BROKEN_DRIVE_REFERENCE|FILE-GONE")?.bucket, "HISTORICAL");
+  const drift = byKey.get("METADATA_DRIFT|AST-P0");
+  assert.equal(drift?.bucket, "ACTION");
+  assert.equal(drift?.auto_applicable, true);
+  assert.equal(drift?.requires_human_approval, false);
+});
+
+test("reconciliation hides historical findings unless requested", async () => {
+  const fixture = {
+    ...snapshot,
+    asset_registry: [...snapshot.asset_registry, { asset_id: "AST-OLD", source_file_id: "FILE-GONE", status: "SUPERSEDED" }],
+    reference_checks: [...snapshot.reference_checks, { file_id: "FILE-GONE", state: "NOT_FOUND" as const, source: "ASSET_REGISTRY" as const }],
+  };
+  const handlers = createLibraryMaintenanceHandlers(async () => completeSnapshotResponse(fixture));
+  const lean = await handlers.planLibraryReconciliation({ dry_run: true, limit: 200 });
+  const all = await handlers.planLibraryReconciliation({ dry_run: true, limit: 200, include_historical: true });
+  assert.equal(lean.ok && all.ok, true);
+  if (lean.ok && all.ok) {
+    assert.ok(all.total > lean.total);
+    assert.equal(lean.items.some((f) => f.bucket === "HISTORICAL"), false);
+    assert.equal(lean.counts.historical, all.total - lean.total);
+  }
+});

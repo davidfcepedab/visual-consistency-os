@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildCanonSummary,
   createPrepareGenerationHandlers,
   prepareGenerationPacket,
   PrepareGenerationInputSchema,
@@ -107,4 +108,14 @@ test("validate_only resolves without creating a request", async () => {
     assert.ok(result.warnings.some((w) => w.code === "VALIDATE_ONLY"));
   }
   assert.equal(writes, 0);
+});
+
+test("canon summary is generated from the registry", () => {
+  const summary = buildCanonSummary(snapshot());
+  const david = summary.subjects.find((item) => item.subject === "David");
+  assert.equal(david?.primary?.file_id, "FILE-PRIMARY-025");
+  assert.ok(david && david.p0.length >= 5);
+  assert.ok(david?.p0.some((ref) => ref.file_id === "FILE-BODY-014" && ref.use === "BODY"));
+  assert.equal(summary.family, "HOLD");
+  assert.match(summary.markdown, /David — P0 = /);
 });

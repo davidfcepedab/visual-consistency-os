@@ -54,7 +54,12 @@ export type LibraryFindingCategory =
   | "UNAVAILABLE_DRIVE_REFERENCE"
   | "INCOMPLETE_CAPTURE_METADATA"
   | "ASSET_STATE_CONFLICT"
-  | "DUPLICATE_NAME_CANDIDATE";
+  | "DUPLICATE_NAME_CANDIDATE"
+  | "METADATA_DRIFT";
+
+// ACTION = touches something in active use; HISTORICAL = superseded,
+// archived or legacy records kept for traceability only.
+export type LibraryFindingBucket = "ACTION" | "HISTORICAL";
 
 export type LibraryFinding = {
   category: LibraryFindingCategory;
@@ -65,7 +70,10 @@ export type LibraryFinding = {
   evidence: string[];
   suggested_action: string;
   suggested_category?: string;
-  requires_human_approval: true;
+  requires_human_approval: boolean;
+  // Safe to apply without a human decision (non-authoritative metadata).
+  auto_applicable?: boolean;
+  bucket?: LibraryFindingBucket;
 };
 
 export const ListLibraryInventoryInputSchema = z.object({
@@ -78,6 +86,8 @@ export const ListLibraryInventoryInputSchema = z.object({
 
 export const PlanLibraryReconciliationInputSchema = z.object({
   dry_run: z.literal(true),
+  // Historical findings are hidden by default; ask for them explicitly.
+  include_historical: z.boolean().default(false),
   force_refresh: z.boolean().default(false),
   cursor: PaginationCursorSchema.optional(),
   limit: z.number().int().min(1).max(200).default(50),
@@ -260,14 +270,87 @@ export function planLibraryReconciliation(
     });
   }
 
+  const filesById = new Map(snapshot.files.map((file) => [file.file_id, file]));
+  for (const row of snapshot.asset_registry) {
+    const fileId = recordDriveId(row);
+    const file = fileId ? filesById.get(fileId) : undefined;
+    const recorded = stringValue(row.final_filename) || stringValue(row.file_name);
+    if (!file || !recorded || recorded === file.name) continue;
+    findings.push({
+      category: "METADATA_DRIFT",
+      record_type: "ASSET",
+      record_id: stringValue(row.asset_id) || fileId,
+      severity: "LOW",
+      verification_status: "VERIFIED_SOURCE",
+      evidence: [`file_id=${fileId}`, `registry_name=${recorded}`, `drive_name=${file.name}`],
+      suggested_action: "SYNC_FILE_METADATA: copiar nombre y link actuales de Drive al registro (no cambia autoridad)",
+      requires_human_approval: false,
+      auto_applicable: true,
+    });
+  }
+
   const unique = new Map<string, LibraryFinding>();
   for (const finding of findings) {
     const key = `${finding.category}|${finding.record_type}|${finding.record_id}`;
     if (!unique.has(key)) unique.set(key, finding);
   }
-  return [...unique.values()].sort((left, right) =>
-    `${left.category}|${left.record_id}`.localeCompare(`${right.category}|${right.record_id}`)
-  );
+  const statusIndex = buildStatusIndex(snapshot);
+  return [...unique.values()]
+    .map((finding) => ({ ...finding, bucket: findingBucket(finding, snapshot, statusIndex) }))
+    .sort((left, right) =>
+      `${left.bucket}|${left.category}|${left.record_id}`.localeCompare(
+        `${right.bucket}|${right.category}|${right.record_id}`
+      )
+    );
+}
+
+const HISTORICAL_STATUS_PATTERN =
+  /^(SUPERSEDED|ARCHIVED|REJECTED|LEGACY|DEPRECATED)|NOT_IDENTITY|BROKEN_REFERENCE|^$/;
+
+function isHistoricalStatus(status: string): boolean {
+  return HISTORICAL_STATUS_PATTERN.test(status);
+}
+
+function buildStatusIndex(snapshot: LibraryMaintenanceSnapshot): Map<string, string[]> {
+  const index = new Map<string, string[]>();
+  const add = (key: string, status: string) => {
+    if (!key) return;
+    index.set(key, [...(index.get(key) || []), status]);
+  };
+  for (const row of [...snapshot.asset_registry, ...snapshot.asset_index]) {
+    const status = normalizeStatus(row.status || row.Status);
+    add(recordDriveId(row), status);
+    add(stringValue(row.asset_id), status);
+  }
+  return index;
+}
+
+function isArchivePath(path: string): boolean {
+  return /(^|\/)99\. Archive\/|\/90\. Archive\//.test(path);
+}
+
+export function findingBucket(
+  finding: LibraryFinding,
+  snapshot: LibraryMaintenanceSnapshot,
+  statusIndex = buildStatusIndex(snapshot)
+): LibraryFindingBucket {
+  switch (finding.category) {
+    case "UNREGISTERED_INBOX_FILE":
+    case "METADATA_DRIFT":
+      return "ACTION";
+    case "INCOMPLETE_CAPTURE_METADATA":
+      return "HISTORICAL";
+    case "UNINDEXED_LIBRARY_FILE":
+    case "DUPLICATE_NAME_CANDIDATE": {
+      const file = snapshot.files.find((item) => item.file_id === finding.record_id);
+      return file && isArchivePath(file.path) ? "HISTORICAL" : "ACTION";
+    }
+    default: {
+      const statuses = statusIndex.get(finding.record_id) || [];
+      if (!statuses.length) return "HISTORICAL";
+      return statuses.every(isHistoricalStatus) ? "HISTORICAL" : "ACTION";
+    }
+  }
 }
 
 function paginate<T>(items: T[], cursor: string | undefined, limit: number, revision: string) {
@@ -480,7 +563,7 @@ export function createLibraryMaintenanceHandlers(backend: BackendReader) {
     },
 
     async planLibraryReconciliation(rawInput: unknown): Promise<
-      SafeResult<{ revision: string; scan?: LibraryMaintenanceSnapshot["scan"]; dry_run: true; write_count: 0; items: LibraryFinding[]; total: number; next_cursor?: string }>
+      SafeResult<{ revision: string; scan?: LibraryMaintenanceSnapshot["scan"]; dry_run: true; write_count: 0; counts: { action: number; historical: number; auto_applicable: number }; items: LibraryFinding[]; total: number; next_cursor?: string }>
     > {
       const parsed = PlanLibraryReconciliationInputSchema.safeParse(rawInput);
       const traceId = createTraceId(parsed.success ? parsed.data.trace_id : undefined);
@@ -491,8 +574,18 @@ export function createLibraryMaintenanceHandlers(backend: BackendReader) {
       try {
         const snapshot = await readCachedSnapshot(traceId, parsed.data.force_refresh);
         const cursorRevision = `${snapshot.revision}:${snapshot.scan?.scan_id}`;
-        const page = paginate(planLibraryReconciliation(snapshot), parsed.data.cursor, parsed.data.limit, cursorRevision);
-        return { ok: true, trace_id: traceId, revision: snapshot.revision, scan: snapshot.scan, dry_run: true, write_count: 0, ...page };
+        const all = planLibraryReconciliation(snapshot);
+        const counts = {
+          action: all.filter((finding) => finding.bucket === "ACTION").length,
+          historical: all.filter((finding) => finding.bucket === "HISTORICAL").length,
+          auto_applicable: all.filter((finding) => finding.auto_applicable).length,
+        };
+        const visible = parsed.data.include_historical
+          ? all
+          : all.filter((finding) => finding.bucket !== "HISTORICAL");
+        // Cursor binds to the filter too, so pages never mix views.
+        const page = paginate(visible, parsed.data.cursor, parsed.data.limit, `${cursorRevision}:${parsed.data.include_historical ? "all" : "action"}`);
+        return { ok: true, trace_id: traceId, revision: snapshot.revision, scan: snapshot.scan, dry_run: true, write_count: 0, counts, ...page };
       } catch (error) {
         return handlerError(error, traceId);
       }
