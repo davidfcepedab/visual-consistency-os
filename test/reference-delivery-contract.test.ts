@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { generationToolResult } from "../src/reference-delivery.js";
+import { readGenerationHandoff } from "../src/generator-handoff.js";
 import type { GenerationPacket, VisualAnchor } from "../src/prepare-generation-tools.js";
 
 function anchor(fileId: string): VisualAnchor {
@@ -45,6 +46,10 @@ test("attaches the primary and every explicitly required reference", async () =>
   assert.equal(structured.reference_delivery.status, "ATTACHED");
   assert.equal(structured.reference_delivery.count, 2);
   assert.equal(result.content.filter((item) => item.type === "image").length, 2);
+  const handoff = readGenerationHandoff(result);
+  assert.equal(handoff.references.length, 2);
+  assert.equal(handoff.references[0].source_file_id, "FILE-PRIMARY-001");
+  assert.equal(handoff.generator_consumption, "NOT_VERIFIED");
 });
 
 test("blocks the handoff when any mandatory bitmap cannot be delivered", async () => {

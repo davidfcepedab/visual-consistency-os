@@ -15,9 +15,7 @@ function doGet(e) {
 
       case 'batch':
         return jsonResponse_(
-          getBatchDetail_(
-            String(e?.parameter?.id || '')
-          )
+          handleSafeReadAction_('batch', e?.parameter || {})
         );
 
       case 'captures':

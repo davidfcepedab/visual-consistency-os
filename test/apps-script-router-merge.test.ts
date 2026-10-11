@@ -618,6 +618,22 @@ test("safe-read Apps Script source contains no mutating or external APIs", () =>
   }
 });
 
+test("batch route returns NOT_FOUND for a missing batch and never writes or throws", () => {
+  const runtime = loadRecoveredRouter();
+  const found = callGet(runtime.doGet, "batch", { id: "BATCH-001" });
+  assert.equal(found.ok, true);
+  assert.equal((found.batch as UnknownRecord).batch_id, "BATCH-001");
+  const missing = callGet(runtime.doGet, "batch", { id: "BATCH-MISSING" });
+  assert.equal(missing.ok, false);
+  assert.equal((missing.error as UnknownRecord).code, "NOT_FOUND");
+  const invalid = callGet(runtime.doGet, "batch", { id: "../BATCH" });
+  assert.equal((invalid.error as UnknownRecord).code, "INVALID_ARGUMENT");
+  runtime.sheets.BATCHES.push([...runtime.sheets.BATCHES[1]]);
+  const duplicate = callGet(runtime.doGet, "batch", { id: "BATCH-001" });
+  assert.equal((duplicate.error as UnknownRecord).code, "CONFLICT");
+  assert.equal(runtime.writeAttempts(), 0);
+});
+
 test("recovered router capture lookup is exact, unique, and structured", () => {
   const { doGet } = loadRecoveredRouter();
   const found = callGet(doGet, "capture", { id: "CAP-001" });

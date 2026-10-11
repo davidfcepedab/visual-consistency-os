@@ -141,6 +141,34 @@ function authoritySnapshot(): GenerationContextSnapshot {
   };
 }
 
+test("canon summary uses the generation resolver without requests, promotion or state changes", async () => {
+  const snapshot = authoritySnapshot();
+  snapshot.config.FAMILY_STATUS = "HOLD";
+  const before = JSON.stringify(snapshot);
+  let writes = 0;
+  const handlers = createPrepareGenerationHandlers({
+    read: async action => { assert.equal(action, "generation_context"); return { ok: true, snapshot }; },
+    write: async () => { writes += 1; throw new Error("No writes allowed"); },
+  });
+  const result = await handlers.getCanonSummary({ subjects: ["David", "Juan", "Couple", "Family"], trace_id: "trace-canon" });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.write_count, 0);
+  assert.equal(result.revision, snapshot.revision);
+  const david = result.identities.find(item => item.subject === "David");
+  assert.ok(david && "authority" in david);
+  assert.equal(david.authority?.primary_identity_anchor?.file_id, "FILE-DAVID-P0");
+  assert.ok(david.source_records?.some(record => record.human_anchor_approval === "APPROVED"));
+  const couple = result.identities.find(item => item.subject === "Couple");
+  assert.ok(couple && "facial_authority" in couple);
+  assert.equal(couple.facial_authority, false);
+  const family = result.identities.find(item => item.subject === "Family");
+  assert.ok(family && "state" in family);
+  assert.equal(family.state, "HOLD");
+  assert.equal(writes, 0);
+  assert.equal(JSON.stringify(snapshot), before);
+});
+
 function handlersFor(snapshot: GenerationContextSnapshot, writes: Record<string, unknown>[] = []) {
   return createPrepareGenerationHandlers({
     read: async (action) => {
@@ -486,12 +514,12 @@ test("invalid base_capture_id blocks edit without claiming the renderer is unava
   );
 });
 
-test("Test E — original 13 tools remain registered with the same Apps Script actions", async () => {
+test("Test E — original 13 tools retain their backend actions through safe read handlers", async () => {
   const source = await readFile("src/index.ts", "utf8");
   const tools = [
-    ["visual_get_system_status", 'appsScriptGet("status")'],
+    ["visual_get_system_status", 'safeReadHandlers.getSystemStatus'],
     ["visual_list_pending_batches", 'appsScriptGet("batches")'],
-    ["visual_get_batch", 'appsScriptGet("batch"'],
+    ["visual_get_batch", 'safeReadHandlers.getBatch'],
     ["visual_list_recent_captures", 'appsScriptGet("captures"'],
     ["visual_get_capture", "safeReadHandlers.getCapture"],
     ["visual_detect_orphan_captures", "safeReadHandlers.detectOrphanCaptures"],
@@ -633,6 +661,20 @@ test("P0 — a Status-only approval convention (no human_anchor_approval column)
       `Status=${status} should be treated as human-verified`
     );
   }
+});
+
+test("unused body-only P0 catalog entries do not inject facial prohibitions into a portrait", async () => {
+  const snapshot = authoritySnapshot();
+  snapshot.asset_registry[0].status = "PRIORITY_0_PRIMARY";
+  snapshot.asset_registry.push({ asset_id: "AST-BODY-ONLY", source_file_id: "FILE-BODY-ONLY",
+    subjects: "David", scope: "Identity Anchor", status: "PRIORITY_0_APPROVED",
+    human_anchor_approval: "APPROVED", allowed_use: "Body proportions only",
+    prohibited_use: "NO face | NO hair authority", approved_by: "David" });
+  const result = await handlersFor(snapshot).prepareGeneration({ project: "PORTRAIT",
+    subjects: ["David"], user_instruction: "One facial portrait" });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.doesNotMatch(result.final_generation_prompt, /NO face|NO hair authority|FILE-BODY-ONLY/);
 });
 
 test("P1 — required anchor is attached to files and prompt", async () => {

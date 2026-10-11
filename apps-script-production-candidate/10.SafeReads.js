@@ -8,6 +8,9 @@
 
 function handleSafeReadAction_(action, params) {
   try {
+    if (action === 'batch') {
+      return getBatchExactSafe_(String(params.id || ''));
+    }
     if (action === 'capture') {
       return getCaptureExactSafe_(
         String(params.id || '')
@@ -34,6 +37,23 @@ function handleSafeReadAction_(action, params) {
       true
     );
   }
+}
+
+function getBatchExactSafe_(batchId) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/.test(batchId)) {
+    return safeReadError_('INVALID_ARGUMENT', 'batch_id is invalid', false);
+  }
+  const matches = readSheetRecordsSafe_(STATIC_CONFIG.SHEETS.BATCHES)
+    .filter(batch => String(batch.batch_id || '').trim() === batchId);
+  if (!matches.length) {
+    return safeReadError_('NOT_FOUND', 'Batch was not found', false);
+  }
+  if (matches.length > 1) {
+    return safeReadError_('CONFLICT', 'batch_id is not unique', false);
+  }
+  const captures = readSheetRecordsSafe_(STATIC_CONFIG.SHEETS.CAPTURES)
+    .filter(capture => String(capture.batch_id || '').trim() === batchId);
+  return { ok: true, batch: matches[0], captures };
 }
 
 function getCaptureExactSafe_(captureId) {
