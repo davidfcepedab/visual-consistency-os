@@ -202,3 +202,15 @@ After deploying this candidate through the existing canary release gate:
 
 Deployment, authority reconciliation and physical delivery verification remain
 separate release gates. Local tests do not establish production readiness.
+
+## 1.7.0 — Modo fluido (2026-10-11)
+
+Reglas fijas: Primary adjunto, sin mezcla de identidades, aprobación humana para P0/Primary/publicación. Todo lo demás es automático:
+
+- `visual_prepare_generation`: paquete liviano (Primary + 2 refs según escena); escenas de cuerpo adjuntan solas las refs de cuerpo; `validate_only=true` no crea request; `verbose=true` devuelve todos los P0.
+- Lecturas a Apps Script: reintento automático (1 vez) y timeout 180 s; errores con `cause` y log estructurado con `trace_id`.
+- Reconciliación: hallazgos `ACTION` vs `HISTORICAL` (históricos ocultos por defecto) y `METADATA_DRIFT` auto-aplicable con `SYNC_FILE_METADATA`.
+- `visual_get_canon_summary`: página de canon generada desde ASSET_REGISTRY (fuente única).
+- `visual_submit_decision` acepta `reference_file_ids_used` y devuelve `reference_check` (REFERENCE_CONSUMED / NOT_CONSUMED).
+
+Despliegue: Apps Script (`15.LibraryReconciliation.js`) primero, luego Cloud Run sin tráfico → validar → promover.

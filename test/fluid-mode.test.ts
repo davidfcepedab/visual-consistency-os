@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildCanonSummary,
+  checkReferenceConsumption,
   createPrepareGenerationHandlers,
   prepareGenerationPacket,
   PrepareGenerationInputSchema,
@@ -118,4 +119,17 @@ test("canon summary is generated from the registry", () => {
   assert.ok(david?.p0.some((ref) => ref.file_id === "FILE-BODY-014" && ref.use === "BODY"));
   assert.equal(summary.family, "HOLD");
   assert.match(summary.markdown, /David — P0 = /);
+});
+
+test("consumption check compares used file_ids against each subject's Primary", () => {
+  const snap = snapshot();
+  snap.captures = [{ capture_id: "CAP-1", identity_subjects: "David" }];
+  const ok = checkReferenceConsumption(snap, "CAP-1", ["FILE-PRIMARY-025", "FILE-BODY-014"]);
+  assert.equal(ok.status, "REFERENCE_CONSUMED");
+  const bad = checkReferenceConsumption(snap, "CAP-1", ["FILE-FACE-019"]);
+  assert.equal(bad.status, "REFERENCE_NOT_CONSUMED");
+  assert.deepEqual(bad.missing_primary_file_ids, ["FILE-PRIMARY-025"]);
+  const url = checkReferenceConsumption(snap, "CAP-1", ["https://drive.google.com/file/d/FILE-PRIMARY-025/view"]);
+  assert.equal(url.status, "REFERENCE_CONSUMED");
+  assert.equal(checkReferenceConsumption(snap, "CAP-404", ["x"]).status, "UNVERIFIABLE");
 });

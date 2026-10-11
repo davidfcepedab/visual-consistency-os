@@ -1685,6 +1685,62 @@ export function buildCanonSummary(snapshot: GenerationContextSnapshot): CanonSum
   return { revision: snapshot.revision, subjects, couple, family, markdown: lines.join("\n") };
 }
 
+export type ReferenceConsumptionCheck = {
+  status: "REFERENCE_CONSUMED" | "REFERENCE_NOT_CONSUMED" | "UNVERIFIABLE";
+  subjects: string[];
+  expected_primary_file_ids: string[];
+  used_file_ids: string[];
+  missing_primary_file_ids: string[];
+  message: string;
+};
+
+// Phase 3: the host reports which reference file_ids it actually fed to the
+// generator; we compare them with the current Primary of every subject in
+// the capture. ATTACHED proves delivery; this proves consumption.
+export function checkReferenceConsumption(
+  snapshot: GenerationContextSnapshot,
+  captureId: string,
+  usedFileIds: string[]
+): ReferenceConsumptionCheck {
+  const used = unique(usedFileIds.map((id) => driveIdFrom(id) || id.trim()).filter(Boolean));
+  const capture = captureById(snapshot, captureId);
+  const subjects = capture
+    ? normalizeSubjects(
+        splitList(field(capture, "identity_subjects", "subjects", "subject")).flatMap((item) =>
+          item.split(/\s*\+\s*|\s*,\s*/)
+        )
+      ).filter((subject) => ["David", "Juan", "Mambo"].includes(subject))
+    : [];
+  if (!capture || subjects.length === 0) {
+    return {
+      status: "UNVERIFIABLE",
+      subjects,
+      expected_primary_file_ids: [],
+      used_file_ids: used,
+      missing_primary_file_ids: [],
+      message: capture
+        ? "Capture has no identity subjects; consumption cannot be checked."
+        : `Capture ${captureId} was not found; consumption cannot be checked.`,
+    };
+  }
+  const expected = unique(
+    subjects
+      .map((subject) => resolveSubjectAuthority(subject, snapshot).primary_identity_anchor?.file_id || "")
+      .filter(Boolean)
+  );
+  const missing = expected.filter((id) => !used.includes(id));
+  return {
+    status: missing.length ? "REFERENCE_NOT_CONSUMED" : "REFERENCE_CONSUMED",
+    subjects,
+    expected_primary_file_ids: expected,
+    used_file_ids: used,
+    missing_primary_file_ids: missing,
+    message: missing.length
+      ? `Primary reference(s) not used by the generator: ${missing.join(", ")}. Identity of this result is not traceable to the canon.`
+      : "Every subject's Primary reference was used by the generator.",
+  };
+}
+
 export function createPrepareGenerationHandlers(input: {
   read: BackendReader;
   write: BackendWriter;
@@ -1885,6 +1941,14 @@ export function createPrepareGenerationHandlers(input: {
             "prepared_by=visual_prepare_generation",
             parsed.data.base_capture_id
               ? `base_capture_id=${parsed.data.base_capture_id}`
+              : "",
+            // Traceability: request -> exact reference bitmaps expected.
+            `primary_refs=${packet.identity_authority
+              .map((item) => item.primary_identity_anchor?.file_id || "")
+              .filter(Boolean)
+              .join(",")}`,
+            packet.auto_required_file_ids?.length
+              ? `scene_refs=${packet.auto_required_file_ids.join(",")}`
               : "",
           ]
             .filter(Boolean)

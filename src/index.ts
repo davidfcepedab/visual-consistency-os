@@ -24,7 +24,10 @@ import {
 import {
   ExecuteRequestInputSchema,
   PrepareGenerationInputSchema,
+  checkReferenceConsumption,
   createPrepareGenerationHandlers,
+  type GenerationContextSnapshot,
+  type ReferenceConsumptionCheck,
 } from "./prepare-generation-tools.js";
 import { generationToolResult } from "./reference-delivery.js";
 import { registerPluginSkills } from "./plugin-skills.js";
@@ -534,15 +537,44 @@ function createServer(): McpServer {
         capture_id: z.string().min(1),
         decision: z.enum(["APPROVE", "ADJUST", "REJECT"]),
         notes: z.string().default(""),
+        // Phase 3: file_ids the generator actually used for this capture.
+        reference_file_ids_used: z.array(z.string().min(1).max(256)).max(20).optional(),
       },
     },
-    async (input) =>
-      toolResult(
-        await appsScriptPost({
-          action: "submit_decision",
-          ...input,
-        })
-      )
+    async (input) => {
+      const { reference_file_ids_used: used, ...decision } = input;
+      let referenceCheck: ReferenceConsumptionCheck | undefined;
+      if (used && used.length) {
+        try {
+          const context = await appsScriptSafeReadGet("generation_context", {});
+          const snapshot = (context as { snapshot?: unknown })?.snapshot;
+          if (snapshot) {
+            referenceCheck = checkReferenceConsumption(
+              snapshot as GenerationContextSnapshot,
+              input.capture_id,
+              used
+            );
+          }
+        } catch {
+          referenceCheck = undefined;
+        }
+      }
+      const notes = referenceCheck
+        ? [decision.notes, `reference_check=${referenceCheck.status}; used=${referenceCheck.used_file_ids.join(",")}`]
+            .filter(Boolean)
+            .join(" | ")
+        : decision.notes;
+      const result = await appsScriptPost({
+        action: "submit_decision",
+        ...decision,
+        notes,
+      });
+      return toolResult(
+        referenceCheck && typeof result === "object" && result !== null
+          ? { ...(result as Record<string, unknown>), reference_check: referenceCheck }
+          : result
+      );
+    }
   );
 
   server.registerTool(
