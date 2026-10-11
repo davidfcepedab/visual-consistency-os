@@ -123,6 +123,13 @@ function candidateCategory(path: string): string {
   return "NEEDS_REVIEW";
 }
 
+const P0_REFERENCE_STATUSES = new Set(["PRIORITY_0_PRIMARY", "PRIORITY_0_APPROVED"]);
+
+function isTraceableP0Reference(asset: Record<string, unknown>): boolean {
+  return P0_REFERENCE_STATUSES.has(normalizeStatus(asset.status)) &&
+    normalizeStatus(asset.provenance_state) === "APPROVAL_TRACEABLE";
+}
+
 export function planLibraryReconciliation(
   snapshot: LibraryMaintenanceSnapshot
 ): LibraryFinding[] {
@@ -217,6 +224,10 @@ export function planLibraryReconciliation(
       normalizeStatus(asset.provenance_state)
     );
     if (!approved || (!notCleared && !provenanceOpen)) continue;
+    // identity_clearance is a publish-ready gate for generated results
+    // (Integration Contracts V2). It does not apply to approved P0 identity
+    // references with traceable provenance, so NOT_CLEARED alone is not a conflict there.
+    if (isTraceableP0Reference(asset) && !provenanceOpen) continue;
     findings.push({
       category: "ASSET_STATE_CONFLICT",
       record_type: "ASSET",

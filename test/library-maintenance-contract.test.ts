@@ -211,3 +211,25 @@ test("library protocol errors are safe and do not leak backend data", async () =
   assert.equal(JSON.stringify(result).includes("secret"), false);
   assert.equal(JSON.stringify(result).includes("private"), false);
 });
+
+test("traceable P0 references with NOT_CLEARED are not publication conflicts", () => {
+  const base = { human_anchor_approval: "APPROVED", identity_clearance: "NOT_CLEARED" };
+  const findings = planLibraryReconciliation({
+    ...snapshot,
+    asset_registry: [
+      { ...base, asset_id: "AST-P0-PRIMARY", status: "PRIORITY_0_PRIMARY", provenance_state: "APPROVAL_TRACEABLE" },
+      { ...base, asset_id: "AST-P0-APPROVED", status: "PRIORITY_0_APPROVED", provenance_state: "APPROVAL_TRACEABLE" },
+      { ...base, asset_id: "AST-P0-OPEN", status: "PRIORITY_0_APPROVED", provenance_state: "NEEDS_REVIEW" },
+      { ...base, asset_id: "AST-SUPPORT", status: "SUPPORT", provenance_state: "APPROVAL_TRACEABLE" },
+      { ...base, asset_id: "AST-LEGACY", status: "", provenance_state: "UNVERIFIED" },
+    ],
+  });
+  const conflicts = new Set(
+    findings.filter((f) => f.category === "ASSET_STATE_CONFLICT").map((f) => f.record_id)
+  );
+  assert.equal(conflicts.has("AST-P0-PRIMARY"), false);
+  assert.equal(conflicts.has("AST-P0-APPROVED"), false);
+  assert.equal(conflicts.has("AST-P0-OPEN"), true, "P0 with open provenance must still conflict");
+  assert.equal(conflicts.has("AST-SUPPORT"), true, "non-P0 approved assets keep the rule");
+  assert.equal(conflicts.has("AST-LEGACY"), true);
+});
