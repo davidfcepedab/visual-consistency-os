@@ -489,9 +489,9 @@ test("invalid base_capture_id blocks edit without claiming the renderer is unava
 test("Test E — original 13 tools remain registered with the same Apps Script actions", async () => {
   const source = await readFile("src/index.ts", "utf8");
   const tools = [
-    ["visual_get_system_status", 'appsScriptGet("status")'],
+    ["visual_get_system_status", "safeReadHandlers.getSystemStatus"],
     ["visual_list_pending_batches", 'appsScriptGet("batches")'],
-    ["visual_get_batch", 'appsScriptGet("batch"'],
+    ["visual_get_batch", "safeReadHandlers.getBatch"],
     ["visual_list_recent_captures", 'appsScriptGet("captures"'],
     ["visual_get_capture", "safeReadHandlers.getCapture"],
     ["visual_detect_orphan_captures", "safeReadHandlers.detectOrphanCaptures"],

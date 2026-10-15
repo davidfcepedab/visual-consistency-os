@@ -6,10 +6,12 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { createAppsScriptReadClient } from "./apps-script-read-client.js";
 import { assertRuntimeSecurity } from "./contracts.js";
-import { DetectOrphanCapturesInputSchema, GetCaptureInputSchema, ListBatchesByProjectInputSchema, createSafeReadHandlers, } from "./safe-read-tools.js";
-import { ListLibraryInventoryInputSchema, PlanLibraryReconciliationInputSchema, createLibraryMaintenanceHandlers, } from "./library-maintenance-tools.js";
+import { DetectOrphanCapturesInputSchema, GetCaptureInputSchema, GetBatchInputSchema, GetSystemStatusInputSchema, ListBatchesByProjectInputSchema, createSafeReadHandlers, } from "./safe-read-tools.js";
+import { ListLibraryInventoryInputSchema, PlanLibraryReconciliationInputSchema, GetLibraryScanPageInputSchema, createLibraryMaintenanceHandlers, } from "./library-maintenance-tools.js";
 import { ApplyLibraryReconciliationInputSchema, createLibraryMutationHandlers, } from "./library-mutation-tools.js";
-import { PrepareGenerationInputSchema, createPrepareGenerationHandlers, } from "./prepare-generation-tools.js";
+import { ExecuteRequestInputSchema, GetCanonSummaryInputSchema, PrepareGenerationInputSchema, createPrepareGenerationHandlers, } from "./prepare-generation-tools.js";
+import { generationToolResult } from "./reference-delivery.js";
+import { registerPluginSkills } from "./plugin-skills.js";
 import { McpAuthenticationError, createBearerAuthenticator, createOAuthAuthorizationRedirectUrl, createOAuthAuthorizationServerMetadata, createOAuthResourceMetadata, oauthResourceMetadataUrl, readOAuthConfiguration, } from "./mcp-auth.js";
 const PORT = Number(process.env.PORT || 8080);
 const WEB_APP_URL = requireEnv("VISUAL_OS_WEB_APP_URL");
@@ -131,23 +133,57 @@ app.all("/mcp", async (req, res) => {
 function createServer() {
     const server = new McpServer({
         name: "visual-identity-os",
-        version: "1.5.3",
+        version: "1.6.0",
+    }, {
+        capabilities: {
+            extensions: {
+                "io.modelcontextprotocol/skills": {},
+            },
+        },
     });
     const safeReadHandlers = createSafeReadHandlers(appsScriptSafeReadGet);
     const libraryMaintenanceHandlers = createLibraryMaintenanceHandlers(appsScriptSafeReadGet);
     const libraryMutationHandlers = createLibraryMutationHandlers({
         read: appsScriptSafeReadGet,
-        write: appsScriptPost,
+        // The reconciliation protocol intentionally probes the durable
+        // idempotency ledger first. A first execution returns a structured
+        // NOT_FOUND and must reach the handler so it can continue to planning.
+        write: appsScriptPostPreservingBackendErrors,
     });
     const prepareGenerationHandlers = createPrepareGenerationHandlers({
         read: appsScriptSafeReadGet,
         write: appsScriptPost,
     });
+    registerPluginSkills(server);
+    server.registerTool("visual_get_library_scan_page", {
+        title: "Read one library source page",
+        description: "One read-only backend page per call, with exact coverage and source cursor. Use for large scans that exceed a host's single-call deadline. Accumulate every page of the same scan and revision; never claim complete coverage from one partial page.",
+        inputSchema: GetLibraryScanPageInputSchema.shape,
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    }, async (input) => toolResult(await libraryMaintenanceHandlers.getLibraryScanPage(input)));
+    server.registerTool("visual_get_canon_summary", {
+        title: "Read canonical identity authority",
+        description: "Read-only authority resolution using the same resolver as generation. Returns exact Primary and source states; Couple has no facial authority. Creates no requests and delivers no bitmaps.",
+        inputSchema: GetCanonSummaryInputSchema.shape,
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    }, async (input) => toolResult(await prepareGenerationHandlers.getCanonSummary(input)));
     server.registerTool("visual_get_system_status", {
         title: "Get Visual OS status",
         description: "Returns counts and operational status from the Visual Identity OS control sheet.",
-        inputSchema: {},
-    }, async () => toolResult(await appsScriptGet("status")));
+        inputSchema: GetSystemStatusInputSchema.shape,
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    }, async (input) => {
+        const status = await safeReadHandlers.getSystemStatus(input);
+        if (!status.ok || !input.include_diagnostics)
+            return toolResult(status);
+        const canon = await prepareGenerationHandlers.getCanonSummary({
+            subjects: ["David", "Juan", "Mambo"], trace_id: status.trace_id,
+        });
+        return toolResult({ ...status,
+            diagnostic_status: canon.ok ? "COMPLETE" : "DEGRADED",
+            canon_diagnostics: canon.ok ? { revision: canon.revision, counts: canon.counts } : canon,
+        });
+    });
     server.registerTool("visual_list_pending_batches", {
         title: "List pending visual batches",
         description: "Lists visual batches waiting for scoring, review, or error resolution.",
@@ -156,10 +192,9 @@ function createServer() {
     server.registerTool("visual_get_batch", {
         title: "Get visual batch",
         description: "Returns one batch and all captures assigned to it.",
-        inputSchema: {
-            batch_id: z.string().min(1),
-        },
-    }, async ({ batch_id }) => toolResult(await appsScriptGet("batch", { id: batch_id })));
+        inputSchema: GetBatchInputSchema.shape,
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    }, async (input) => toolResult(await safeReadHandlers.getBatch(input)));
     server.registerTool("visual_list_recent_captures", {
         title: "List recent captures",
         description: "Returns recent captures from the Universal Inbox registry.",
@@ -184,7 +219,7 @@ function createServer() {
     }, async (input) => toolResult(await safeReadHandlers.listBatchesByProject(input)));
     server.registerTool("visual_list_library_inventory", {
         title: "List visual library inventory",
-        description: "Read-only, paginated inventory of exact Drive file IDs from the Visual OS Inbox and organized library. It does not classify identity or move files.",
+        description: "Read-only, paginated inventory of exact Drive file IDs from the Visual OS Inbox, organized library and Reference Packs. Use force_refresh=true without a cursor after direct Drive edits. It does not classify identity or move files.",
         inputSchema: ListLibraryInventoryInputSchema.shape,
         annotations: {
             readOnlyHint: true,
@@ -195,7 +230,7 @@ function createServer() {
     }, async (input) => toolResult(await libraryMaintenanceHandlers.listLibraryInventory(input)));
     server.registerTool("visual_plan_library_reconciliation", {
         title: "Plan visual library reconciliation",
-        description: "Produces a deterministic dry-run plan for missing registrations, incomplete traceability, state conflicts, unavailable references, and duplicate-name candidates. Requires dry_run=true and always performs zero writes.",
+        description: "Produces a deterministic dry-run plan for missing registrations, incomplete traceability, state conflicts, unavailable references, and duplicate-name candidates. Requires dry_run=true and always performs zero writes. Use force_refresh=true without a cursor after direct Drive edits; paginate the returned scan without refreshing.",
         inputSchema: PlanLibraryReconciliationInputSchema.shape,
         annotations: {
             readOnlyHint: true,
@@ -215,17 +250,31 @@ function createServer() {
             openWorldHint: false,
         },
     }, async (input) => toolResult(await libraryMutationHandlers.applyLibraryReconciliation(input)));
+    server.registerTool("visual_execute_request", {
+        title: "Execute an existing visual request",
+        description: "Retrieves one exact persisted request, resolves its current visual authority, and physically attaches the minimum required identity bitmaps for the host native image generator. Use once for an existing request_id. It never creates a replacement request. The host may generate only when ready_to_generate=true and reference_delivery.status=ATTACHED.",
+        inputSchema: ExecuteRequestInputSchema.shape,
+        annotations: {
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+        },
+    }, async (input) => generationToolResult(await prepareGenerationHandlers.executeRequest(input), input.required_anchor_ids || [], (fileId) => appsScriptGet("reference_image", { file_id: fileId }), input.credit_mode));
     server.registerTool("visual_prepare_generation", {
         title: "Prepare native image generation",
-        description: "Resolves visual identity authority and returns a generation packet for the HOST native image generator. This MCP never renders images and must not be interpreted as image generation being unavailable. READY_TO_GENERATE and request_id are control-plane outputs, not the image. If ready_to_generate is true, the host MUST invoke its native image generator in the same turn using final_generation_prompt and identity_authority references, then return the bitmap. Do not stop after creating the request. ready_to_generate=false only when mandatory visual context is missing.",
-        inputSchema: PrepareGenerationInputSchema.shape,
+        description: "Resolves visual identity authority, physically attaches the primary identity bitmap for every subject plus explicitly required references, and returns a generation packet for the HOST native image generator. This MCP never renders images and must not be interpreted as image generation being unavailable. READY_TO_GENERATE and request_id are control-plane outputs. The host may generate only when ready_to_generate=true and reference_delivery.status=ATTACHED; otherwise it must stop.",
+        inputSchema: {
+            ...PrepareGenerationInputSchema.shape,
+            credit_mode: z.enum(["ECONOMY", "QUALITY"]).optional().default("ECONOMY"),
+        },
         annotations: {
             readOnlyHint: false,
             destructiveHint: false,
             idempotentHint: false,
             openWorldHint: false,
         },
-    }, async (input) => toolResult(await prepareGenerationHandlers.prepareGeneration(input)));
+    }, async (input) => generationToolResult(await prepareGenerationHandlers.prepareGeneration(input), input.required_anchor_ids || [], (fileId) => appsScriptGet("reference_image", { file_id: fileId }), input.credit_mode));
     server.registerTool("visual_create_session", {
         title: "Create visual session",
         description: "Creates an active visual session for rapid exploration without requiring a formal request per image.",
@@ -336,6 +385,12 @@ async function appsScriptGet(action, params = {}) {
     return parseResponse(response);
 }
 async function appsScriptPost(payload) {
+    return appsScriptPostWithPolicy(payload, true);
+}
+async function appsScriptPostPreservingBackendErrors(payload) {
+    return appsScriptPostWithPolicy(payload, false);
+}
+async function appsScriptPostWithPolicy(payload, throwOnBackendError) {
     const url = new URL(WEB_APP_URL);
     url.searchParams.set("secret", SHARED_SECRET);
     const response = await fetch(url, {
@@ -347,9 +402,9 @@ async function appsScriptPost(payload) {
         redirect: "follow",
         signal: AbortSignal.timeout(60_000),
     });
-    return parseResponse(response);
+    return parseResponse(response, throwOnBackendError);
 }
-async function parseResponse(response) {
+async function parseResponse(response, throwOnBackendError = true) {
     const text = await response.text();
     let parsed;
     try {
@@ -361,7 +416,8 @@ async function parseResponse(response) {
     if (!response.ok) {
         throw new Error(`Apps Script request failed with HTTP ${response.status}`);
     }
-    if (typeof parsed === "object" &&
+    if (throwOnBackendError &&
+        typeof parsed === "object" &&
         parsed !== null &&
         "ok" in parsed &&
         parsed.ok === false) {

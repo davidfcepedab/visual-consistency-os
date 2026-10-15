@@ -38,6 +38,12 @@ export const ExecuteRequestInputSchema = z.object({
   trace_id: TraceIdSchema.optional(),
 });
 
+export const GetCanonSummaryInputSchema = z.object({
+  subjects: z.array(z.enum(["David", "Juan", "Mambo", "Couple", "Family"]))
+    .min(1).max(5).default(["David", "Juan", "Mambo", "Couple", "Family"]),
+  trace_id: TraceIdSchema.optional(),
+});
+
 export type ExecuteRequestInput = z.infer<typeof ExecuteRequestInputSchema>;
 
 export type VisualAnchor = {
@@ -99,7 +105,8 @@ export type GenerationWarning = {
     | "PRIORITY_0_FALLBACK"
     | "REFERENCE_CONTEXT_UNAVAILABLE"
     | "MODE_NORMALIZED"
-    | "REQUEST_CREATED";
+    | "REQUEST_CREATED"
+    | "STORED_PROMPT_RECOMPILED";
   message: string;
   subject?: string;
   location?: string;
@@ -165,6 +172,9 @@ export type GenerationPacket = {
   prohibited_use: string[];
   final_generation_prompt: string;
   reference_files: VisualAnchor[];
+  // Every reference the prompt declares under REQUIRED REFERENCES. Delivery
+  // must attach all of them, so the prompt never demands an unattached bitmap.
+  required_reference_ids?: string[];
   blockers: Blocker[];
   warnings: GenerationWarning[];
   auto_resolutions?: string[];
@@ -434,11 +444,15 @@ function hasHumanApproval(record: UnknownRecord): boolean {
 }
 
 function isVerifiedFacialAnchor(anchor: VisualAnchor | null | undefined): boolean {
-  if (!anchor || anchor.verification_status !== "VERIFIED_SOURCE") return false;
+  return Boolean(anchor && anchor.verification_status === "VERIFIED_SOURCE" && isFacialScopeAllowed(anchor));
+}
+
+function isFacialScopeAllowed(anchor: VisualAnchor | null | undefined): boolean {
+  if (!anchor) return false;
 
   const prohibited = foldText(anchor.prohibited_use.join(" "));
   if (
-    /no facial primary|facial identity replacement|body support only/.test(
+    /no facial primary|facial identity replacement|body support only|\bno face\b|\bno facial (?:identity|authority)\b/.test(
       prohibited
     )
   ) {
@@ -446,10 +460,8 @@ function isVerifiedFacialAnchor(anchor: VisualAnchor | null | undefined): boolea
   }
 
   const allowed = foldText(anchor.allowed_use.join(" "));
-  const name = foldText(anchor.file_name || "");
   const bodyOnlyByContract =
-    /\bbody\b/.test(name) &&
-    /body support|visible proportions|body presentation/.test(allowed) &&
+    /body support|body proportions only|visible proportions|body presentation/.test(allowed) &&
     !/facial reference|visible face|face identity/.test(allowed);
 
   return !bodyOnlyByContract;
@@ -577,6 +589,29 @@ function historicalReferenceAlias(record: UnknownRecord): string {
   return match?.[1] || "";
 }
 
+// True when the ID names a known record whose exact physical file has been
+// superseded. Diagnostics must not report such a reference as nonexistent.
+function isSupersededReference(
+  snapshot: GenerationContextSnapshot,
+  id: string
+): boolean {
+  const needle = id.trim();
+  if (!needle) return false;
+  const inactive = inactiveFileIds(snapshot);
+  return [
+    snapshot.asset_registry,
+    snapshot.asset_index,
+    snapshot.captures,
+    snapshot.requests,
+    snapshot.result_memory,
+  ].some((pool) =>
+    pool.some(
+      (item) =>
+        recordIds(item).includes(needle) && inactive.has(physicalFileId(item))
+    )
+  );
+}
+
 function findLocated(
   snapshot: GenerationContextSnapshot,
   id: string
@@ -646,6 +681,35 @@ function findById(
 function extractExplicitIds(instruction: string, extra: string[] = []): string[] {
   const fromText = instruction.match(/\b(?:AST|CAP|REQ|RES|FILE)-[A-Za-z0-9:_-]+/g) || [];
   return unique([...fromText, ...extra]);
+}
+
+// Requests persisted by visual_prepare_generation store the compiled prompt,
+// including the identity authority that was current at the time. Re-executing
+// that text verbatim would nest a stale primary anchor and a REQUIRED
+// REFERENCES list that is no longer attached. Recover the original instruction
+// and the declared required IDs so authority is resolved again from scratch.
+const STORED_PROMPT_SECTION_END =
+  /\n(?:\n(?:SCENE SUMMARY|REQUIRED REFERENCES|REFERENCE SCOPE|LOCKS|DO NOT|ALLOWED USE|COUPLE):|Do not re-anchor identity from the edited result)/;
+
+export function recoverStoredInstruction(prompt: string): {
+  instruction: string;
+  requiredIds: string[];
+  recompiled: boolean;
+} {
+  const requiredIds = [...prompt.matchAll(/^REQUIRED REFERENCES: (.*)$/gm)].flatMap(
+    (match) => match[1].match(/\b(?:LIB|AST|CAP|RES|FILE)-[A-Za-z0-9:_-]+/g) || []
+  );
+  let instruction = prompt.trim();
+  let recompiled = false;
+  while (instruction.startsWith(IDENTITY_CONTRACT)) {
+    const start = instruction.search(/^(?:REQUEST|CHANGE ONLY): /m);
+    if (start < 0) break;
+    const body = instruction.slice(start).replace(/^(?:REQUEST|CHANGE ONLY): /, "");
+    const end = body.search(STORED_PROMPT_SECTION_END);
+    instruction = (end < 0 ? body : body.slice(0, end)).trim();
+    recompiled = true;
+  }
+  return { instruction, requiredIds: unique(requiredIds), recompiled };
 }
 
 function sameAnchor(left: VisualAnchor, right: VisualAnchor): boolean {
@@ -1067,7 +1131,7 @@ function resolveSubjectAuthority(
     [...dedupedVerified].sort(
       (left, right) => identityRank(right) - identityRank(left)
     )[0] ||
-    identityAnchors[0] ||
+    identityAnchors.find(isFacialScopeAllowed) ||
     null;
 
   // Report AMBIGUOUS only if multiple DISTINCT physical identities verified
@@ -1247,9 +1311,6 @@ function buildPrompt(input: {
       continue;
     }
     const extras = [
-      ...authority.priority_0_refs.map(describeAnchor),
-      ...authority.supporting_anchors.map(describeAnchor),
-      authority.body_anchor ? describeAnchor(authority.body_anchor) : "",
       ...authority.hairstyle_grooming_locks.map(describeAnchor),
       ...authority.tattoo_body_locks.map(describeAnchor),
     ].filter(Boolean);
@@ -1295,6 +1356,9 @@ function buildPrompt(input: {
       "",
       `REQUIRED REFERENCES: ${input.requiredAnchors.map(describeAnchor).join("; ")}. These must be attached and used.`
     );
+    for (const anchor of input.requiredAnchors) {
+      lines.push(`REFERENCE SCOPE ${describeAnchor(anchor)}: ALLOWED ${anchor.allowed_use.join("; ") || "canonical role only"}; PROHIBITED ${anchor.prohibited_use.join("; ") || "identity mixing"}. These rules apply to this reference only.`);
+    }
   }
 
   const lockLines = [
@@ -1352,7 +1416,6 @@ export function prepareGenerationPacket(
   const allowed = unique([
     ...identity.flatMap((item) => [
       ...(item.primary_identity_anchor?.allowed_use || []),
-      ...item.priority_0_refs.flatMap((anchor) => anchor.allowed_use),
     ]),
     ...detailLocks.flatMap((anchor) => anchor.allowed_use),
   ]);
@@ -1364,7 +1427,6 @@ export function prepareGenerationPacket(
     "auto identity promotion",
     ...identity.flatMap((item) => [
       ...(item.primary_identity_anchor?.prohibited_use || []),
-      ...item.priority_0_refs.flatMap((anchor) => anchor.prohibited_use),
     ]),
   ]);
 
@@ -1403,7 +1465,9 @@ export function prepareGenerationPacket(
     if (!located) {
       blockers.push({
         code: "MISSING_REQUIRED_REFERENCE",
-        message: `Required reference ${id} does not exist in CONFIG, ASSET_REGISTRY, ASSET_INDEX, or CAPTURES. No reference was invented.`,
+        message: isSupersededReference(snapshot, id)
+          ? `Required reference ${id} exists but its exact file is superseded. Supersession is not bypassed; choose its active replacement explicitly. No reference was invented.`
+          : `Required reference ${id} does not exist in CONFIG, ASSET_REGISTRY, ASSET_INDEX, or CAPTURES. No reference was invented.`,
       });
       continue;
     }
@@ -1577,6 +1641,9 @@ export function prepareGenerationPacket(
     prohibited_use: prohibited,
     final_generation_prompt: prompt,
     reference_files: uniqueRefs,
+    required_reference_ids: unique(
+      requiredAnchors.map((anchor) => anchor.file_id || anchor.asset_id)
+    ),
     blockers,
     warnings,
     ...(autoResolutions.length > 0 && { auto_resolutions: autoResolutions }),
@@ -1637,6 +1704,55 @@ export function createPrepareGenerationHandlers(input: {
   write: BackendWriter;
 }) {
   return {
+    async getCanonSummary(rawInput: z.input<typeof GetCanonSummaryInputSchema>) {
+      const parsed = GetCanonSummaryInputSchema.safeParse(rawInput);
+      const traceId = createTraceId(parsed.success ? parsed.data.trace_id : undefined);
+      if (!parsed.success) return structuredError("INVALID_ARGUMENT", "Canon summary input is invalid", traceId);
+      try {
+        const response = await input.read("generation_context", { trace_id: traceId });
+        if (!isRecord(response) || !isSnapshot(response.snapshot)) {
+          return structuredError("BACKEND_PROTOCOL_ERROR", "Invalid generation context snapshot", traceId);
+        }
+        const snapshot = response.snapshot;
+        const identities = unique(parsed.data.subjects).map(subject => {
+          if (subject === "Couple") {
+            return { subject, role: "RELATIONSHIP_GEOMETRY_ONLY", facial_authority: false,
+              relationship_anchors: coupleAnchors(snapshot) };
+          }
+          if (subject === "Family") {
+            const state = configValue(snapshot.config, "FAMILY_STATUS");
+            return { subject, state: state || "UNKNOWN", verification_status: state ? "VERIFIED_SOURCE" : "NOT_VERIFIED" };
+          }
+          const authority = resolveSubjectAuthority(subject, snapshot);
+          const primary = authority.primary_identity_anchor;
+          const sourceRows = primary ? collectRecords(snapshot).filter(({ record }) =>
+            (primary.file_id && driveIdFrom(field(record, "source_file_id", "file_id", "Drive Link", "drive_url")) === primary.file_id) ||
+            field(record, "asset_id", "Asset ID") === primary.asset_id)
+            .map(({ record, source }) => ({ source,
+              asset_id: field(record, "asset_id", "Asset ID"),
+              status: field(record, "status", "Status"),
+              human_anchor_approval: field(record, "human_anchor_approval"),
+              identity_clearance: field(record, "identity_clearance"),
+              provenance_state: field(record, "provenance_state"),
+              capture_id: field(record, "capture_id", "source_capture_id"),
+            })) : [];
+          return { subject, authority, source_records: sourceRows,
+            resolution_status: primary?.verification_status === "VERIFIED_SOURCE" &&
+              !hasUnresolvedCompetingAuthorities(authority) ? "VERIFIED" : "NEEDS_REVIEW" };
+        });
+        return { ok: true as const, trace_id: traceId, revision: snapshot.revision,
+          read_only: true, write_count: 0, identities,
+          counts: {
+            unresolved_primary_authorities: identities.filter(item => "authority" in item &&
+              item.authority && hasUnresolvedCompetingAuthorities(item.authority)).length,
+            identities_needing_review: identities.filter(item => "resolution_status" in item &&
+              item.resolution_status === "NEEDS_REVIEW").length,
+          },
+          bitmap_delivery: "NOT_REQUESTED", generator_consumption: "NOT_VERIFIED" };
+      } catch {
+        return structuredError("BACKEND_ERROR", "Canon summary read failed", traceId, true);
+      }
+    },
     async executeRequest(
       rawInput: z.input<typeof ExecuteRequestInputSchema>
     ): Promise<SafeResult<GenerationPacket>> {
@@ -1703,12 +1819,20 @@ export function createPrepareGenerationHandlers(input: {
             : "GENERATE";
         const parentRequestId = field(existing, "parent_request_id");
         const sourceResultId = field(existing, "source_result_id");
+        const stored = recoverStoredInstruction(prompt);
+        if (!stored.instruction) {
+          return structuredError(
+            "INVALID_ARGUMENT",
+            `Visual request ${parsed.data.request_id} has no recoverable instruction`,
+            traceId
+          );
+        }
 
         const packet = prepareGenerationPacket(
           PrepareGenerationInputSchema.parse({
             project,
             subjects,
-            user_instruction: prompt,
+            user_instruction: stored.instruction,
             scene,
             generator:
               parsed.data.generator ||
@@ -1718,7 +1842,10 @@ export function createPrepareGenerationHandlers(input: {
             parent_request_id: parentRequestId,
             source_result_id: sourceResultId,
             iteration: Number(field(existing, "iteration") || 1),
-            required_anchor_ids: parsed.data.required_anchor_ids,
+            required_anchor_ids: unique([
+              ...(parsed.data.required_anchor_ids || []),
+              ...stored.requiredIds,
+            ]),
             trace_id: traceId,
           }),
           response.snapshot,
@@ -1728,6 +1855,19 @@ export function createPrepareGenerationHandlers(input: {
         return {
           ...packet,
           request_id: parsed.data.request_id,
+          warnings: stored.recompiled
+            ? [
+                ...packet.warnings,
+                {
+                  code: "STORED_PROMPT_RECOMPILED" as const,
+                  message: `Stored compiled prompt was reduced to its original instruction; identity authority was resolved again${
+                    stored.requiredIds.length
+                      ? ` and declared required references were kept: ${stored.requiredIds.join(", ")}`
+                      : ""
+                  }.`,
+                },
+              ]
+            : packet.warnings,
         };
       } catch {
         return structuredError(

@@ -9,12 +9,15 @@ import { assertRuntimeSecurity } from "./contracts.js";
 import {
   DetectOrphanCapturesInputSchema,
   GetCaptureInputSchema,
+  GetBatchInputSchema,
+  GetSystemStatusInputSchema,
   ListBatchesByProjectInputSchema,
   createSafeReadHandlers,
 } from "./safe-read-tools.js";
 import {
   ListLibraryInventoryInputSchema,
   PlanLibraryReconciliationInputSchema,
+  GetLibraryScanPageInputSchema,
   createLibraryMaintenanceHandlers,
 } from "./library-maintenance-tools.js";
 import {
@@ -23,10 +26,12 @@ import {
 } from "./library-mutation-tools.js";
 import {
   ExecuteRequestInputSchema,
+  GetCanonSummaryInputSchema,
   PrepareGenerationInputSchema,
   createPrepareGenerationHandlers,
 } from "./prepare-generation-tools.js";
 import { generationToolResult } from "./reference-delivery.js";
+import { registerPluginSkills } from "./plugin-skills.js";
 import {
   McpAuthenticationError,
   createBearerAuthenticator,
@@ -196,10 +201,19 @@ app.all("/mcp", async (req: Request, res: Response) => {
 });
 
 function createServer(): McpServer {
-  const server = new McpServer({
-    name: "visual-identity-os",
-    version: "1.5.3",
-  });
+  const server = new McpServer(
+    {
+      name: "visual-identity-os",
+      version: "1.6.0",
+    },
+    {
+      capabilities: {
+        extensions: {
+          "io.modelcontextprotocol/skills": {},
+        },
+      },
+    }
+  );
   const safeReadHandlers = createSafeReadHandlers(appsScriptSafeReadGet);
   const libraryMaintenanceHandlers = createLibraryMaintenanceHandlers(
     appsScriptSafeReadGet
@@ -215,6 +229,21 @@ function createServer(): McpServer {
     read: appsScriptSafeReadGet,
     write: appsScriptPost,
   });
+  registerPluginSkills(server);
+
+  server.registerTool("visual_get_library_scan_page", {
+    title: "Read one library source page",
+    description: "One read-only backend page per call, with exact coverage and source cursor. Use for large scans that exceed a host's single-call deadline. Accumulate every page of the same scan and revision; never claim complete coverage from one partial page.",
+    inputSchema: GetLibraryScanPageInputSchema.shape,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  }, async input => toolResult(await libraryMaintenanceHandlers.getLibraryScanPage(input)));
+
+  server.registerTool("visual_get_canon_summary", {
+    title: "Read canonical identity authority",
+    description: "Read-only authority resolution using the same resolver as generation. Returns exact Primary and source states; Couple has no facial authority. Creates no requests and delivers no bitmaps.",
+    inputSchema: GetCanonSummaryInputSchema.shape,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  }, async input => toolResult(await prepareGenerationHandlers.getCanonSummary(input)));
 
   server.registerTool(
     "visual_get_system_status",
@@ -222,9 +251,20 @@ function createServer(): McpServer {
       title: "Get Visual OS status",
       description:
         "Returns counts and operational status from the Visual Identity OS control sheet.",
-      inputSchema: {},
+      inputSchema: GetSystemStatusInputSchema.shape,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     },
-    async () => toolResult(await appsScriptGet("status"))
+    async (input) => {
+      const status = await safeReadHandlers.getSystemStatus(input);
+      if (!status.ok || !input.include_diagnostics) return toolResult(status);
+      const canon = await prepareGenerationHandlers.getCanonSummary({
+        subjects: ["David", "Juan", "Mambo"], trace_id: status.trace_id,
+      });
+      return toolResult({ ...status,
+        diagnostic_status: canon.ok ? "COMPLETE" : "DEGRADED",
+        canon_diagnostics: canon.ok ? { revision: canon.revision, counts: canon.counts } : canon,
+      });
+    }
   );
 
   server.registerTool(
@@ -244,12 +284,10 @@ function createServer(): McpServer {
       title: "Get visual batch",
       description:
         "Returns one batch and all captures assigned to it.",
-      inputSchema: {
-        batch_id: z.string().min(1),
-      },
+      inputSchema: GetBatchInputSchema.shape,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     },
-    async ({ batch_id }) =>
-      toolResult(await appsScriptGet("batch", { id: batch_id }))
+    async (input) => toolResult(await safeReadHandlers.getBatch(input))
   );
 
   server.registerTool(
@@ -377,7 +415,8 @@ function createServer(): McpServer {
       generationToolResult(
         await prepareGenerationHandlers.executeRequest(input),
         input.required_anchor_ids || [],
-        (fileId) => appsScriptGet("reference_image", { file_id: fileId })
+        (fileId) => appsScriptGet("reference_image", { file_id: fileId }),
+        input.credit_mode
       )
   );
 
@@ -387,7 +426,10 @@ function createServer(): McpServer {
       title: "Prepare native image generation",
       description:
         "Resolves visual identity authority, physically attaches the primary identity bitmap for every subject plus explicitly required references, and returns a generation packet for the HOST native image generator. This MCP never renders images and must not be interpreted as image generation being unavailable. READY_TO_GENERATE and request_id are control-plane outputs. The host may generate only when ready_to_generate=true and reference_delivery.status=ATTACHED; otherwise it must stop.",
-      inputSchema: PrepareGenerationInputSchema.shape,
+      inputSchema: {
+        ...PrepareGenerationInputSchema.shape,
+        credit_mode: z.enum(["ECONOMY", "QUALITY"]).optional().default("ECONOMY"),
+      },
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -399,7 +441,8 @@ function createServer(): McpServer {
       generationToolResult(
         await prepareGenerationHandlers.prepareGeneration(input),
         input.required_anchor_ids || [],
-        (fileId) => appsScriptGet("reference_image", { file_id: fileId })
+        (fileId) => appsScriptGet("reference_image", { file_id: fileId }),
+        input.credit_mode
       )
   );
 
