@@ -17,7 +17,7 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 | | Production | Staging |
 |---|---|---|
 | MCP URL | `https://visual-identity-os-mcp-4cf7h52zxa-uc.a.run.app/mcp` | `https://staging---visual-identity-os-mcp-4cf7h52zxa-uc.a.run.app/mcp` |
-| Cloud Run revision | `visual-identity-os-mcp-00095-bax` (v1.6.6, 100% since 2026-10-15) | tag `staging` → `00095-bax` (move the tag on each new test deploy) |
+| Cloud Run revision | `visual-identity-os-mcp-00097-rik` (v1.6.7, 100% since 2026-10-15) | tag `staging` → `00097-rik` (move the tag on each new test deploy) |
 | Scaling | session affinity, min 1 / max 1 instance, timeout 600 s | same |
 | Apps Script (script `1Fgf6jzz…`) | deployment `AKfycbwo8sv69…` @34 | same until a new version is staged |
 | Auth0 tenant | `dev-s882ypj8vfzv2rob` (US) | same |
@@ -42,6 +42,11 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 - `credit_mode` defaults to **QUALITY**: up to 6 references / 15 MB, extra face angles shared round-robin across subjects, plus one location. Pass `credit_mode: ECONOMY` for a lighter response. Validated on REQ-20261014-183009-7B6960: 6 refs (David 3, Juan 2, RIC Casa 1), 9.2 MB.
 - RIC Casa / Piscina location anchors (9) human-approved 2026-10-15 by David Cepeda in ASSET_REGISTRY.
 - Juan keeps `P0-01 Primary cuerpo sentado` by owner decision; QUALITY adds his face refs.
+
+## 1.6.7 (2026-10-15)
+
+- Owner decision: `mode: EDIT` without `base_capture_id` / `parent_request_id` / `source_result_id` (an image attached in the host chat) is normalized to GENERATE with `MODE_NORMALIZED` and `auto_resolutions: MODE_EDIT_TO_GENERATE` instead of blocking with `MISSING_EDIT_BASE`. The host passes its attachment as composition input; identity comes only from P0 references. These results are not linked to a registered base.
+- An unknown base ID still blocks (`INVALID_BASE_CAPTURE`). Both cases validated in production.
 
 ## 1.6.6 (2026-10-15)
 
@@ -72,7 +77,7 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 3. Promote: `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions <revision>=100`
 4. Record the release in `DEPLOYMENT_LOG.md`.
 
-**Rollback:** `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions visual-identity-os-mcp-00093-vuf=100` (v1.6.5). Then `00091-yix` (v1.6.4), `00087-lug` (v1.6.3). Then `00081-won` (v1.6.0 + session affinity). Older: `00074-pon` (v1.6.0), `00049-tc2` (v1.5.3, Apps Script @32).
+**Rollback:** `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions visual-identity-os-mcp-00095-bax=100` (v1.6.6). Then `00093-vuf` (v1.6.5), `00091-yix` (v1.6.4). Then `00081-won` (v1.6.0 + session affinity). Older: `00074-pon` (v1.6.0), `00049-tc2` (v1.5.3, Apps Script @32).
 
 ## Pending
 
