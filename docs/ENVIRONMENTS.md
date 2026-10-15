@@ -67,7 +67,7 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 5. **Auth0 hardening:** disable Username-Password on the public client; move `VISUAL_OS_SHARED_SECRET` and `MCP_API_KEY` from plain env vars to Secret Manager and rotate them.
 6. ~~`/health` version mismatch~~ fixed in 1.6.1 (still hardcoded; bump both strings on release).
 8. Location choice is the first match, not semantic (terrace vs living room): pass `required_anchor_ids` for an exact room.
-9. **Identity fidelity in ChatGPT:** the native image generator does not reliably condition on images returned by an MCP tool, even with `ATTACHED 2/2`. Workarounds: attach P0 images in the user message, or add server-side rendering with a reference-capable image API (pending decision).
+9. **Identity fidelity in ChatGPT (root cause found 2026-10-15):** generate in ChatGPT **Work** mode (calls arrive as `openai-mcp/1.0.0 (Codex)`, run for minutes and pass the attached P0 bitmaps to the image generator; verified on v1.6.3 with David + Juan). **Chat** mode (`openai-mcp/1.0.0`, ~8 s) does not feed MCP images to its generator and loses identity. Previous note: the native image generator does not reliably condition on images returned by an MCP tool, even with `ATTACHED 2/2`. Workarounds: attach P0 images in the user message, or add server-side rendering with a reference-capable image API (pending decision).
 7. **Fit domain:** apply the same standard (next round).
 
 ## Connected platforms (verified 2026-10-14 via Cloud Run logs)
