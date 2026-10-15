@@ -74,7 +74,7 @@ app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
     ok: true,
     service: "visual-identity-os-mcp",
-    version: "1.6.2",
+    version: "1.6.3",
   });
 });
 
@@ -223,7 +223,7 @@ function createServer(): McpServer {
   const server = new McpServer(
     {
       name: "visual-identity-os",
-      version: "1.6.2",
+      version: "1.6.3",
     },
     {
       capabilities: {
@@ -447,7 +447,7 @@ function createServer(): McpServer {
         "Resolves visual identity authority, physically attaches the primary identity bitmap for every subject plus explicitly required references, and returns a generation packet for the HOST native image generator. This MCP never renders images and must not be interpreted as image generation being unavailable. READY_TO_GENERATE and request_id are control-plane outputs. The host may generate only when ready_to_generate=true and reference_delivery.status=ATTACHED; otherwise it must stop.",
       inputSchema: {
         ...PrepareGenerationInputSchema.shape,
-        credit_mode: z.enum(["ECONOMY", "QUALITY"]).optional().default("QUALITY"),
+        credit_mode: z.enum(["ECONOMY", "QUALITY"]).optional(),
       },
       annotations: {
         readOnlyHint: false,

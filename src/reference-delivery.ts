@@ -13,11 +13,13 @@ type ReferenceLoader = (fileId: string) => Promise<unknown>;
 
 export type ReferenceDeliveryMode = "ECONOMY" | "QUALITY";
 
-// QUALITY (default) adds verified extra face angles, shared round-robin across
-// subjects, up to QUALITY_MAX_REFERENCES and MAX_TOTAL_BYTES: one Primary per
-// subject is not enough for the host generator to hold identity. ECONOMY sends
-// only the mandatory set (each subject's Primary, one matched location and
-// explicitly required references) when a smaller response is needed.
+// QUALITY adds verified extra face angles, shared round-robin across subjects,
+// up to QUALITY_MAX_REFERENCES and MAX_TOTAL_BYTES: one Primary per subject is
+// not enough for the host generator to hold two identities. ECONOMY sends only
+// the mandatory set (each subject's Primary, one matched location and
+// explicitly required references). Without an explicit credit_mode the mode is
+// chosen per request (see resolveDeliveryMode): a single-subject QUALITY
+// packet reached ~18 MB and ~70 s, which hosts time out on.
 const QUALITY_MAX_REFERENCES = 6;
 const MAX_REFERENCE_BYTES = 5 * 1024 * 1024;
 const MAX_TOTAL_BYTES: Record<ReferenceDeliveryMode, number> = {
@@ -139,11 +141,19 @@ async function loadImage(
   }
 }
 
+export function resolveDeliveryMode(
+  packet: Pick<GenerationPacket, "identity_authority">,
+  requested?: ReferenceDeliveryMode
+): ReferenceDeliveryMode {
+  if (requested) return requested;
+  return (packet.identity_authority?.length || 0) >= 2 ? "QUALITY" : "ECONOMY";
+}
+
 export async function generationToolResult(
   value: unknown,
   requiredIds: string[],
   loadReference: ReferenceLoader,
-  mode: ReferenceDeliveryMode = "ECONOMY"
+  requestedMode?: ReferenceDeliveryMode
 ) {
   if (!isRecord(value) || value.ok !== true || value.ready_to_generate !== true) {
     return {
@@ -153,6 +163,7 @@ export async function generationToolResult(
   }
 
   const packet = value as GenerationPacket;
+  const mode = resolveDeliveryMode(packet, requestedMode);
   const { selected, unresolvedRequiredIds } = selectReferences(packet, [
     ...new Set([...requiredIds, ...(packet.required_reference_ids || [])]),
   ]);
