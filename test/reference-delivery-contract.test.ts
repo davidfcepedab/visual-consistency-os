@@ -135,11 +135,8 @@ test("QUALITY shares extra face references across subjects and attaches the loca
   assert.equal(attached.filter((id) => id.startsWith("FILE-J")).length >= 2, true);
 });
 
-test("without credit_mode, one subject gets ECONOMY and two subjects get QUALITY", () => {
-  const base = packet();
-  const david = base.identity_authority[0];
-  assert.equal(resolveDeliveryMode({ identity_authority: [david] }), "ECONOMY");
-  assert.equal(resolveDeliveryMode({ identity_authority: [david, { ...david, subject: "Juan" }] }), "QUALITY");
-  assert.equal(resolveDeliveryMode({ identity_authority: [david] }, "QUALITY"), "QUALITY");
-  assert.equal(resolveDeliveryMode({ identity_authority: [david, david] }, "ECONOMY"), "ECONOMY");
+test("without credit_mode every request gets ECONOMY; an explicit mode wins", () => {
+  assert.equal(resolveDeliveryMode(), "ECONOMY");
+  assert.equal(resolveDeliveryMode("QUALITY"), "QUALITY");
+  assert.equal(resolveDeliveryMode("ECONOMY"), "ECONOMY");
 });

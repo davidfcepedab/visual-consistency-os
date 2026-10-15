@@ -38,7 +38,7 @@ app.get("/health", (_req, res) => {
     res.status(200).json({
         ok: true,
         service: "visual-identity-os-mcp",
-        version: "1.6.3",
+        version: "1.6.5",
     });
 });
 if (OAUTH) {
@@ -151,7 +151,7 @@ app.all("/mcp", async (req, res) => {
 function createServer() {
     const server = new McpServer({
         name: "visual-identity-os",
-        version: "1.6.3",
+        version: "1.6.5",
     }, {
         capabilities: {
             extensions: {
