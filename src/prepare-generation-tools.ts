@@ -1538,6 +1538,24 @@ export function prepareGenerationPacket(
       message: "REGENERATE was requested without a base source; mode normalized to GENERATE. Use base_capture_id, parent_request_id, or source_result_id to continue an existing image.",
     });
   }
+  // Owner decision 2026-10-15: an EDIT of an image attached in the host chat
+  // (not registered in VIOS) proceeds as GENERATE instead of blocking. The
+  // host passes its own attachment as composition input; identity still comes
+  // only from the attached P0 references. Such edits are not traceable to a
+  // registered base. Invalid base IDs keep blocking below.
+  if (
+    parsed.mode === "EDIT" &&
+    !parsed.base_capture_id &&
+    !parsed.parent_request_id &&
+    !parsed.source_result_id
+  ) {
+    effectiveMode = "GENERATE";
+    autoResolutions.push("MODE_EDIT_TO_GENERATE");
+    warnings.push({
+      code: "MODE_NORMALIZED",
+      message: "EDIT was requested without a registered base; mode normalized to GENERATE. Pass the image attached in the chat to the generator as composition input only; facial identity comes exclusively from the attached P0 references. This result is not linked to a registered base capture.",
+    });
+  }
 
   let frozenSource: UnknownRecord | undefined;
   if (effectiveMode !== "GENERATE") {
