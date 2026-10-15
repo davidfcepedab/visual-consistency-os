@@ -33,7 +33,7 @@ export type PrepareGenerationInput = z.infer<typeof PrepareGenerationInputSchema
 export const ExecuteRequestInputSchema = z.object({
   request_id: z.string().trim().min(1).max(128),
   generator: z.string().trim().min(1).max(64).optional().default("CHATGPT_IMAGE"),
-  credit_mode: z.enum(["ECONOMY", "QUALITY"]).optional().default("ECONOMY"),
+  credit_mode: z.enum(["ECONOMY", "QUALITY"]).optional().default("QUALITY"),
   required_anchor_ids: z.array(z.string().trim().min(1).max(128)).max(20).optional(),
   trace_id: TraceIdSchema.optional(),
 });

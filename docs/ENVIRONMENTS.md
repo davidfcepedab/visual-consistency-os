@@ -17,7 +17,7 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 | | Production | Staging |
 |---|---|---|
 | MCP URL | `https://visual-identity-os-mcp-4cf7h52zxa-uc.a.run.app/mcp` | `https://staging---visual-identity-os-mcp-4cf7h52zxa-uc.a.run.app/mcp` |
-| Cloud Run revision | `visual-identity-os-mcp-00083-reb` (v1.6.1, 100% since 2026-10-15) | tag `staging` → `00083-reb` (move the tag on each new test deploy) |
+| Cloud Run revision | `visual-identity-os-mcp-00085-naw` (v1.6.2, 100% since 2026-10-15) | tag `staging` → `00085-naw` (move the tag on each new test deploy) |
 | Scaling | session affinity, min 1 / max 1 instance, timeout 600 s | same |
 | Apps Script (script `1Fgf6jzz…`) | deployment `AKfycbwo8sv69…` @34 | same until a new version is staged |
 | Auth0 tenant | `dev-s882ypj8vfzv2rob` (US) | same |
@@ -37,6 +37,12 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 - Locations resolve through `alias` notes ("RIC Casa" ↔ "CasaRicaurte" ↔ "Ricaurte").
 - One matched Room Anchor is attached even in ECONOMY.
 
+## 1.6.2 (2026-10-15)
+
+- `credit_mode` defaults to **QUALITY**: up to 6 references / 15 MB, extra face angles shared round-robin across subjects, plus one location. Pass `credit_mode: ECONOMY` for a lighter response. Validated on REQ-20261014-183009-7B6960: 6 refs (David 3, Juan 2, RIC Casa 1), 9.2 MB.
+- RIC Casa / Piscina location anchors (9) human-approved 2026-10-15 by David Cepeda in ASSET_REGISTRY.
+- Juan keeps `P0-01 Primary cuerpo sentado` by owner decision; QUALITY adds his face refs.
+
 ## Release procedure
 
 1. `gcloud run deploy visual-identity-os-mcp --source . --region us-central1 --env-vars-file <env from current revision> --session-affinity --min-instances 1 --max-instances 1 --timeout 600 --memory 1Gi --no-traffic --tag staging` (never `services update` alone: the service template may hold an old revision's env)
@@ -44,7 +50,7 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 3. Promote: `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions <revision>=100`
 4. Record the release in `DEPLOYMENT_LOG.md`.
 
-**Rollback:** `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions visual-identity-os-mcp-00081-won=100` (v1.6.0 + session affinity). Older: `00074-pon` (v1.6.0), `00049-tc2` (v1.5.3, Apps Script @32).
+**Rollback:** `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions visual-identity-os-mcp-00083-reb=100` (v1.6.1, ECONOMY default). Then `00081-won` (v1.6.0 + session affinity). Older: `00074-pon` (v1.6.0), `00049-tc2` (v1.5.3, Apps Script @32).
 
 ## Pending
 
@@ -54,7 +60,7 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 4. **Cleanup:** old Cloud Run tags removed 2026-10-14 (only production + `staging` remain; old revisions kept and can be re-tagged). Still pending: archive unused Apps Script deployments (15 listed by `clasp deployments`). Auth0 cleanup done 2026-10-14: tenant now holds only `OWN · Visual · Public PKCE`, `FIT · ChatGPT · DCR 1/2` and the system app; APIs `OWN · Visual · API`, `Braincell FIT`, Management API.
 5. **Auth0 hardening:** disable Username-Password on the public client; move `VISUAL_OS_SHARED_SECRET` and `MCP_API_KEY` from plain env vars to Secret Manager and rotate them.
 6. ~~`/health` version mismatch~~ fixed in 1.6.1 (still hardcoded; bump both strings on release).
-8. **Location anchors for RIC Casa / Ricaurte** (9 Room Anchors) are `human_anchor_approval=PENDING`; approve the ones to use. Location choice is the first match, not semantic (terrace vs living room): pass `required_anchor_ids` for an exact room.
+8. Location choice is the first match, not semantic (terrace vs living room): pass `required_anchor_ids` for an exact room.
 9. **Identity fidelity in ChatGPT:** the native image generator does not reliably condition on images returned by an MCP tool, even with `ATTACHED 2/2`. Workarounds: attach P0 images in the user message, or add server-side rendering with a reference-capable image API (pending decision).
 7. **Fit domain:** apply the same standard (next round).
 

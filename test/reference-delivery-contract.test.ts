@@ -104,3 +104,33 @@ test("blocks when an explicitly required id cannot resolve to a physical referen
     )
   );
 });
+
+test("QUALITY shares extra face references across subjects and attaches the location", async () => {
+  const base = packet();
+  const david = base.identity_authority[0];
+  const juanPrimary = { ...anchor("FILE-JUAN-P01"), subject: "Juan" };
+  const davidRefs = ["FILE-D2", "FILE-D3", "FILE-D4", "FILE-D5", "FILE-D6"].map(anchor);
+  const juanRefs = ["FILE-J2", "FILE-J6"].map((id) => ({ ...anchor(id), subject: "Juan" }));
+  const room = { ...anchor("FILE-RIC-ROOM"), role: "Room Anchor", subject: "" };
+  const value: GenerationPacket = {
+    ...base,
+    subjects: ["David", "Juan"],
+    identity_authority: [
+      { ...david, priority_0_refs: [david.primary_identity_anchor!, ...davidRefs] },
+      { ...david, subject: "Juan", primary_identity_anchor: juanPrimary,
+        priority_0_refs: [juanPrimary, ...juanRefs] },
+    ],
+    location_anchors: [room],
+    reference_files: [david.primary_identity_anchor!, juanPrimary, ...davidRefs, ...juanRefs, room],
+  };
+  const result = await generationToolResult(value, [], async (fileId) => ({
+    ok: true, mime_type: "image/png", data_base64: Buffer.from(fileId).toString("base64"),
+  }), "QUALITY");
+  const attached = (result.structuredContent as { reference_delivery: { attached: string[] } })
+    .reference_delivery.attached;
+  assert.equal(attached.length, 6);
+  for (const id of ["FILE-PRIMARY-001", "FILE-JUAN-P01", "FILE-RIC-ROOM", "FILE-J2", "FILE-D2"]) {
+    assert.equal(attached.includes(id), true, `${id} must be attached`);
+  }
+  assert.equal(attached.filter((id) => id.startsWith("FILE-J")).length >= 2, true);
+});

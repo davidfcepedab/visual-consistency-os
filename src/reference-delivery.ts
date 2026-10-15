@@ -13,11 +13,11 @@ type ReferenceLoader = (fileId: string) => Promise<unknown>;
 
 export type ReferenceDeliveryMode = "ECONOMY" | "QUALITY";
 
-// ECONOMY (default) sends only the mandatory set: the primary identity anchor
-// of every subject plus explicitly required references. Optional references
-// can make MCP responses several megabytes and exhaust the host tool budget
-// before native generation starts, so extra verified references are opt-in
-// through QUALITY.
+// QUALITY (default) adds verified extra face angles, shared round-robin across
+// subjects, up to QUALITY_MAX_REFERENCES and MAX_TOTAL_BYTES: one Primary per
+// subject is not enough for the host generator to hold identity. ECONOMY sends
+// only the mandatory set (each subject's Primary, one matched location and
+// explicitly required references) when a smaller response is needed.
 const QUALITY_MAX_REFERENCES = 6;
 const MAX_REFERENCE_BYTES = 5 * 1024 * 1024;
 const MAX_TOTAL_BYTES: Record<ReferenceDeliveryMode, number> = {
@@ -71,12 +71,38 @@ function selectOptionalReferences(
   if (mode !== "QUALITY") return [];
   const seen = new Set(mandatory.map((anchor) => anchor.file_id));
   const optional: VisualAnchor[] = [];
-  for (const anchor of packet.reference_files) {
-    if (mandatory.length + optional.length >= QUALITY_MAX_REFERENCES) break;
-    if (!anchor.file_id || seen.has(anchor.file_id)) continue;
-    if (anchor.verification_status !== "VERIFIED_SOURCE") continue;
+  const take = (anchor: VisualAnchor | undefined): boolean => {
+    if (mandatory.length + optional.length >= QUALITY_MAX_REFERENCES) return false;
+    if (!anchor?.file_id || seen.has(anchor.file_id)) return true;
+    if (anchor.verification_status !== "VERIFIED_SOURCE") return true;
     seen.add(anchor.file_id);
     optional.push(anchor);
+    return true;
+  };
+
+  // Extra face angles are shared round-robin across subjects, so one subject
+  // with many approved P0 references cannot crowd out the others.
+  const queues = packet.identity_authority.map((authority) => [
+    ...(authority.priority_0_refs || []),
+  ]);
+  let added = true;
+  while (added) {
+    added = false;
+    for (const queue of queues) {
+      while (queue.length) {
+        const anchor = queue.shift()!;
+        const before = optional.length;
+        if (!take(anchor)) return optional;
+        if (optional.length > before) {
+          added = true;
+          break;
+        }
+      }
+    }
+  }
+
+  for (const anchor of packet.reference_files) {
+    if (!take(anchor)) break;
   }
   return optional;
 }
