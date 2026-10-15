@@ -74,7 +74,7 @@ app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
     ok: true,
     service: "visual-identity-os-mcp",
-    version: "1.5.3",
+    version: "1.6.1",
   });
 });
 
@@ -142,6 +142,25 @@ app.all("/mcp", async (req: Request, res: Response) => {
       entry = { server, transport };
     }
 
+    // Sessions live in memory, so an instance restart or a request routed to
+    // another instance loses them. Every tool is a stateless call to the
+    // Apps Script backend, so serve an unknown/expired session's POST with a
+    // one-shot stateless transport instead of failing with 400 (which ChatGPT
+    // surfaces as "(r.content ?? []).map is not a function").
+    if (!entry && req.method === "POST") {
+      const server = createServer();
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+      });
+      res.on("close", () => {
+        void transport.close();
+        void server.close();
+      });
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+      return;
+    }
+
     if (!entry) {
       res.status(400).json({
         jsonrpc: "2.0",
@@ -204,7 +223,7 @@ function createServer(): McpServer {
   const server = new McpServer(
     {
       name: "visual-identity-os",
-      version: "1.6.0",
+      version: "1.6.1",
     },
     {
       capabilities: {

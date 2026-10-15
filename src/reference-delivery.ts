@@ -44,6 +44,9 @@ function selectReferences(
   packet.identity_authority.forEach((authority) =>
     add(authority.primary_identity_anchor)
   );
+  // A matched location is part of what the scene must reproduce, so attach
+  // one approved Room Anchor even in ECONOMY instead of relying on text.
+  add(packet.location_anchors?.[0]);
 
   const unresolvedRequiredIds: string[] = [];
   for (const id of requiredIds) {

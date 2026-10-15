@@ -1168,6 +1168,15 @@ function sceneHaystack(parsed: PrepareGenerationInput): string {
   );
 }
 
+// Location registrations record alternative names as "alias <Name>" in their
+// approval notes (e.g. "locacion RIC Casa; alias CasaRicaurte").
+function anchorAliases(record: UnknownRecord): string[] {
+  const notes = field(record, "approval_notes", "Notes", "notes");
+  return Array.from(notes.matchAll(/\balias\s+([^;,.\n]+)/gi), (match) =>
+    match[1].trim()
+  ).filter(Boolean);
+}
+
 function sceneAnchors(
   snapshot: GenerationContextSnapshot,
   role: string,
@@ -1193,9 +1202,20 @@ function sceneAnchors(
         field(record, "file_name", "Asset", "name"),
         field(record, "Folder", "folder", "scene", "notes", "Notes"),
         field(record, "asset_id"),
+        ...anchorAliases(record),
       ].join(" ");
-      return nameTokens(labels).some(
-        (token) => token.length >= 5 && haystack.includes(token)
+      if (
+        nameTokens(labels).some(
+          (token) => token.length >= 5 && haystack.includes(token)
+        )
+      ) {
+        return true;
+      }
+      // Aliases are often compound ("CasaRicaurte" for "RIC Casa"), so also
+      // accept a scene word contained in an alias ("ricaurte").
+      const aliases = anchorAliases(record).map(foldText);
+      return nameTokens(haystack).some(
+        (word) => word.length >= 5 && aliases.some((alias) => alias.includes(word))
       );
     })
     .map(({ record, source }) => toAnchor(record, source));

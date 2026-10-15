@@ -1160,3 +1160,46 @@ test("blocks when an explicitly required approved Room Anchor is missing", () =>
   );
   assert.equal(packet.host_handoff.action, "DO_NOT_INVOKE_GENERATOR");
 });
+
+test("location registered under a short name resolves through its alias (RIC Casa / CasaRicaurte)", () => {
+  const snapshot = authoritySnapshot();
+  snapshot.asset_registry = [
+    ...(snapshot.asset_registry || []),
+    {
+      asset_id: "LIB-RIC-SALA",
+      subjects: "",
+      project: "RIC Casa",
+      scene: "RIC Casa",
+      scope: "Room Anchor",
+      status: "ACTIVE",
+      source_file_id: "FILE-RIC-SALA",
+      file_name: "Loc_Sala_Lock_008.jpg",
+      approval_notes: "VIOS-LOCATIONS-20261012: locacion RIC Casa; alias CasaRicaurte",
+    },
+  ];
+  const packet = prepareGenerationPacket(
+    {
+      project: "RICAURTE-SERIE-01",
+      subjects: ["David"],
+      user_instruction: "Morning coffee on the terrace in Ricaurte.",
+      scene: "",
+      generator: "CHATGPT_IMAGE",
+      mode: "GENERATE",
+      base_capture_id: "",
+      parent_request_id: "",
+      source_result_id: "",
+      iteration: 1,
+      trace_id: "trace-ricaurte-alias",
+    },
+    snapshot,
+    "trace-ricaurte-alias"
+  );
+  assert.equal(
+    packet.location_anchors.some((anchor) => anchor.asset_id === "LIB-RIC-SALA"),
+    true
+  );
+  assert.equal(
+    packet.location_anchors.some((anchor) => anchor.asset_id === "AST-ROOM-MIAMI"),
+    false
+  );
+});
