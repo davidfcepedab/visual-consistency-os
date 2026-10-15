@@ -17,7 +17,7 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 | | Production | Staging |
 |---|---|---|
 | MCP URL | `https://visual-identity-os-mcp-4cf7h52zxa-uc.a.run.app/mcp` | `https://staging---visual-identity-os-mcp-4cf7h52zxa-uc.a.run.app/mcp` |
-| Cloud Run revision | `visual-identity-os-mcp-00087-lug` (v1.6.3, 100% since 2026-10-15) | tag `staging` → `00087-lug` (move the tag on each new test deploy) |
+| Cloud Run revision | `visual-identity-os-mcp-00091-yix` (v1.6.4, 100% since 2026-10-15) | tag `staging` → `00091-yix` (move the tag on each new test deploy) |
 | Scaling | session affinity, min 1 / max 1 instance, timeout 600 s | same |
 | Apps Script (script `1Fgf6jzz…`) | deployment `AKfycbwo8sv69…` @34 | same until a new version is staged |
 | Auth0 tenant | `dev-s882ypj8vfzv2rob` (US) | same |
@@ -43,6 +43,11 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 - RIC Casa / Piscina location anchors (9) human-approved 2026-10-15 by David Cepeda in ASSET_REGISTRY.
 - Juan keeps `P0-01 Primary cuerpo sentado` by owner decision; QUALITY adds his face refs.
 
+## 1.6.4 (2026-10-15)
+
+- `ambiguous_identity` is true only when distinct verified identities exist and no canonical Primary resolves deterministically. Several approved P0 angles no longer flag it (ChatGPT read the old flag as an authority conflict and refused to generate). Competing unresolved Primaries still block. Validated in production: David, Juan, Mambo → `ambiguous_identity=false`, same Primary and references.
+- `identity_clearance=NOT_CLEARED` on P0 references is left as is: it is the publish gate for generated results, not a reference gate.
+
 ## 1.6.3 (2026-10-15)
 
 - Without `credit_mode`, the delivery mode is chosen per request: 1 subject → ECONOMY, 2+ subjects → QUALITY. An explicit `credit_mode` always wins.
@@ -56,7 +61,7 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 3. Promote: `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions <revision>=100`
 4. Record the release in `DEPLOYMENT_LOG.md`.
 
-**Rollback:** `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions visual-identity-os-mcp-00085-naw=100` (v1.6.2, QUALITY default). Then `00083-reb` (v1.6.1, ECONOMY default). Then `00081-won` (v1.6.0 + session affinity). Older: `00074-pon` (v1.6.0), `00049-tc2` (v1.5.3, Apps Script @32).
+**Rollback:** `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions visual-identity-os-mcp-00087-lug=100` (v1.6.3). Then `00085-naw` (v1.6.2), `00083-reb` (v1.6.1). Then `00081-won` (v1.6.0 + session affinity). Older: `00074-pon` (v1.6.0), `00049-tc2` (v1.5.3, Apps Script @32).
 
 ## Pending
 
