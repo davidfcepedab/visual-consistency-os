@@ -1134,8 +1134,10 @@ function resolveSubjectAuthority(
     identityAnchors.find(isFacialScopeAllowed) ||
     null;
 
-  // Report AMBIGUOUS only if multiple DISTINCT physical identities verified
-  const hasAmbiguity = dedupedVerified.length > 1;
+  // A primary plus approved profile/expression references is one identity
+  // pack. Report ambiguity only when the canonical resolver cannot choose
+  // deterministically, using the same rule as the generation readiness gate.
+  const hasAmbiguity = canonical?.deterministic === false;
   const provenanceConflict = identityAnchors.some(hasProvenanceConflictMarker);
 
   const pickRole = (role: string): VisualAnchor[] =>

@@ -141,6 +141,50 @@ function authoritySnapshot(): GenerationContextSnapshot {
   };
 }
 
+test("canon summary agrees with readiness for one Primary plus approved P0 profiles", async () => {
+  const snapshot = authoritySnapshot();
+  snapshot.config.ACTIVE_DAVID_MASTER_PACK_ID = "";
+  snapshot.asset_index = [];
+  snapshot.asset_registry = [
+    { asset_id: "PRIMARY", subjects: "David", scope: "Identity Anchor", status: "PRIORITY_0_PRIMARY", source_file_id: "FILE-PRIMARY", approved_by: "David" },
+    { asset_id: "PROFILE", subjects: "David", scope: "Identity Anchor", status: "PRIORITY_0_APPROVED", source_file_id: "FILE-PROFILE", approved_by: "David" },
+  ];
+  const before = JSON.stringify(snapshot);
+  const result = await createPrepareGenerationHandlers({
+    read: async () => ({ ok: true, snapshot }),
+    write: async () => { throw new Error("Read-only summary must not write"); },
+  }).getCanonSummary({ subjects: ["David"] });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const david = result.identities[0];
+  assert.ok("authority" in david && david.authority);
+  assert.equal(david.authority.ambiguous_identity, false);
+  assert.equal(david.authority.primary_identity_anchor?.file_id, "FILE-PRIMARY");
+  assert.equal(david.resolution_status, "VERIFIED");
+  assert.equal(JSON.stringify(snapshot), before);
+});
+
+test("canon summary keeps competing Primaries ambiguous and reviewable", async () => {
+  const snapshot = authoritySnapshot();
+  snapshot.config.ACTIVE_DAVID_MASTER_PACK_ID = "";
+  snapshot.asset_index = [];
+  snapshot.asset_registry = [
+    { asset_id: "PRIMARY-A", subjects: "David", scope: "Identity Anchor", status: "PRIORITY_0_PRIMARY", source_file_id: "FILE-PRIMARY-A", approved_by: "David" },
+    { asset_id: "PRIMARY-B", subjects: "David", scope: "Identity Anchor", status: "PRIORITY_0_PRIMARY", source_file_id: "FILE-PRIMARY-B", approved_by: "David" },
+  ];
+  const result = await createPrepareGenerationHandlers({
+    read: async () => ({ ok: true, snapshot }),
+    write: async () => { throw new Error("Read-only summary must not write"); },
+  }).getCanonSummary({ subjects: ["David"] });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const david = result.identities[0];
+  assert.ok("authority" in david && david.authority);
+  assert.equal(david.authority.ambiguous_identity, true);
+  assert.equal(david.resolution_status, "NEEDS_REVIEW");
+  assert.equal(result.counts.unresolved_primary_authorities, 1);
+});
+
 function handlersFor(snapshot: GenerationContextSnapshot, writes: Record<string, unknown>[] = []) {
   return createPrepareGenerationHandlers({
     read: async (action) => {

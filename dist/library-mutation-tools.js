@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { MutationControlSchema, createTraceId, structuredError, } from "./contracts.js";
 import { driveIdFrom, readFullLibrarySnapshot, recordDriveId, stringValue, } from "./library-maintenance-tools.js";
 /**
@@ -177,11 +178,47 @@ export function planSafeLibraryMutations(snapshot, actions) {
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+function canonicalize(value) {
+    if (Array.isArray(value))
+        return value.map(canonicalize);
+    if (isRecord(value))
+        return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalize(value[key])]));
+    return value;
+}
+// Audit-only consolidation requires the complete source sheets, not a new
+// traversal of every Drive folder and every historical reference. The existing
+// generation_context route returns precisely these raw source tables. Hash
+// the same four tables as Apps Script so optimistic concurrency is unchanged.
+async function readConsolidationSnapshot(read, traceId) {
+    const response = await read("generation_context", { trace_id: traceId });
+    if (!isRecord(response) || response.ok !== true || !isRecord(response.snapshot)) {
+        throw new Error("INVALID_CONSOLIDATION_CONTEXT");
+    }
+    const source = response.snapshot;
+    const sheets = {};
+    for (const key of ["captures", "result_memory", "asset_registry", "asset_index"]) {
+        const rows = source[key];
+        if (!Array.isArray(rows) || !rows.every(isRecord))
+            throw new Error("INCOMPLETE_CONSOLIDATION_CONTEXT");
+        sheets[key] = rows;
+    }
+    const revision = `library-${createHash("sha256")
+        .update(JSON.stringify(canonicalize(sheets))).digest("hex")}`;
+    return {
+        revision, files: [], reference_checks: [],
+        captures: sheets.captures, result_memory: sheets.result_memory,
+        asset_registry: sheets.asset_registry, asset_index: sheets.asset_index,
+    };
+}
 export function createLibraryMutationHandlers(io) {
     let cachedSnapshot;
     let cachedAt = 0;
     const snapshotTtlMs = 5 * 60 * 1000;
-    async function readSnapshot(traceId, expectedRevision) {
+    async function readSnapshot(traceId, expectedRevision, consolidationOnly) {
+        // Do not reuse a metadata-only context for candidate registration, which
+        // still requires a complete physical Drive inventory.
+        if (consolidationOnly)
+            return readConsolidationSnapshot(io.read, traceId);
         if (cachedSnapshot &&
             cachedSnapshot.revision === expectedRevision &&
             Date.now() - cachedAt < snapshotTtlMs) {
@@ -228,7 +265,8 @@ export function createLibraryMutationHandlers(io) {
                         return structuredError(replayCode === "INVALID_ARGUMENT" ? "INVALID_ARGUMENT" : "BACKEND_ERROR", "Visual library idempotency lookup failed", traceId, replayCode !== "INVALID_ARGUMENT");
                     }
                 }
-                const snapshot = await readSnapshot(traceId, input.expected_revision);
+                const consolidationOnly = input.actions.every(action => action.type === "CONSOLIDATE_DECIDED_FILE");
+                const snapshot = await readSnapshot(traceId, input.expected_revision, consolidationOnly);
                 if (input.expected_revision !== snapshot.revision) {
                     return structuredError("CONFLICT", `expected_revision does not match the current library revision (${snapshot.revision})`, traceId);
                 }

@@ -72,6 +72,51 @@ function unknownLineage(capture, missingFields) {
         verification_status: "UNKNOWN",
     };
 }
+// Older RESULT_MEMORY rows store asset_link, and ASSET_REGISTRY stores
+// source_file_id/source_capture_id. Resolve those existing exact identifiers
+// in memory; never manufacture or persist a historical capture/request ID.
+function exactDriveIds(record) {
+    const ids = new Set();
+    for (const key of ["file_id", "source_file_id", "drive_url", "asset_link"]) {
+        const value = stringValue(record[key]);
+        if (!value)
+            continue;
+        if (["file_id", "source_file_id"].includes(key)) {
+            if (/^[A-Za-z0-9_-]+$/.test(value))
+                ids.add(value);
+            continue;
+        }
+        try {
+            const url = new URL(value);
+            if (url.protocol !== "https:" || url.hostname !== "drive.google.com")
+                continue;
+            const id = url.pathname.match(/^\/file\/d\/([A-Za-z0-9_-]+)(?:\/|$)/)?.[1]
+                || (url.pathname === "/open" ? url.searchParams.get("id") : "");
+            if (id && /^[A-Za-z0-9_-]+$/.test(id))
+                ids.add(id);
+        }
+        catch { /* Invalid or non-Drive links remain unresolved. */ }
+    }
+    return [...ids];
+}
+function resolveCaptureReference(record, captures) {
+    const explicit = stringValue(record.capture_id) || stringValue(record.source_capture_id);
+    // An explicit broken reference must stay visible; never replace it by a
+    // different capture that happens to share a file.
+    if (explicit)
+        return { captureId: explicit, exactFileLink: false };
+    const ids = exactDriveIds(record);
+    if (ids.length !== 1)
+        return { captureId: "", exactFileLink: false };
+    const matches = captures.filter(capture => {
+        const captureFiles = exactDriveIds(capture);
+        return captureFiles.length === 1 && captureFiles[0] === ids[0];
+    });
+    const captureIds = new Set(matches.map(capture => stringValue(capture.capture_id)).filter(Boolean));
+    return captureIds.size === 1
+        ? { captureId: [...captureIds][0], exactFileLink: true }
+        : { captureId: "", exactFileLink: false };
+}
 export function classifyOrphans(snapshot) {
     const batchIds = new Set(snapshot.batches.map((batch) => stringValue(batch.batch_id)).filter(Boolean));
     const requestIds = new Set(snapshot.requests
@@ -130,7 +175,7 @@ export function classifyOrphans(snapshot) {
     }
     const classifyCaptureReferences = (records, category, recordType, idField) => {
         records.forEach((record, index) => {
-            const captureId = stringValue(record.capture_id);
+            const { captureId } = resolveCaptureReference(record, snapshot.captures);
             if (captureId && captureIds.has(captureId))
                 return;
             results.push({
@@ -185,6 +230,9 @@ export function summarizeOrphans(snapshot) {
         unknown_lineage: items.filter(item => item.reference_state === "UNKNOWN").length,
         by_category: byCategory,
         session_only_captures: snapshot.captures.filter(capture => !stringValue(capture.request_id) && stringValue(capture.session_id)).length,
+        resolved_capture_links_by_exact_file_id: [
+            ...snapshot.reviews, ...snapshot.result_memory, ...snapshot.assets,
+        ].filter(record => resolveCaptureReference(record, snapshot.captures).exactFileLink).length,
         session_target_verification: "NOT_VERIFIED",
         primary_authority_verification: "NOT_VERIFIED",
         // Missing capture_id never proves a human-approved imported asset invalid.

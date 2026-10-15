@@ -9,6 +9,7 @@ import vm from "node:vm";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { createAppsScriptReadClient } from "../src/apps-script-read-client.js";
 import { createSafeReadHandlers } from "../src/safe-read-tools.js";
+import { createLibraryMutationHandlers } from "../src/library-mutation-tools.js";
 
 type UnknownRecord = Record<string, unknown>;
 type AppsScriptOutput = {
@@ -540,6 +541,43 @@ test("library snapshot is versioned, read-only, and includes both registries", (
   assert.ok(Array.isArray(response.asset_index));
   assert.equal(runtime.writeAttempts(), 0);
   assert.equal(JSON.stringify(runtime.sheets), runtime.original);
+});
+
+test("consolidation uses source sheets with the exact Apps Script revision and no Drive rescan", async () => {
+  const runtime = loadRecoveredRouter();
+  runtime.sheets.CAPTURES[1][1] = "FILE-DECIDED-001";
+  runtime.sheets.CAPTURES[1][8] = "APPROVED";
+  runtime.sheets.ASSET_REGISTRY[1][6] = "FILE-DECIDED-001";
+  const before = JSON.stringify(runtime.sheets);
+  let complete = callGet(runtime.doGet, "library_snapshot", { page_size: "500" });
+  while (complete.complete !== true) complete = callGet(runtime.doGet, "library_snapshot", {
+    page_size: "500", cursor: complete.next_cursor as string,
+  });
+  const actions: string[] = [];
+  const handlers = createLibraryMutationHandlers({
+    read: async (action, params) => {
+      actions.push(action);
+      return callGet(runtime.doGet, action, params);
+    },
+    write: async () => { throw new Error("A dry run must not write"); },
+  });
+  const result = await handlers.applyLibraryReconciliation({
+    dry_run: true, expected_revision: complete.revision,
+    idempotency_key: "consolidation-context-parity", reason: "Read-only parity test",
+    trace_id: "trace-consolidation-context-parity",
+    updated_by: "contract-test", source_evidence: [{ source_type: "CAPTURES", source_id: "CAP-001", verification_status: "VERIFIED_SOURCE" }],
+    overwrite: false,
+    actions: [{ type: "CONSOLIDATE_DECIDED_FILE", capture_id: "CAP-001", file_id: "FILE-DECIDED-001" }],
+  });
+  assert.deepEqual(actions, ["generation_context"]);
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.revision, complete.revision);
+    assert.equal(result.write_count, 0);
+    assert.equal((result.planned as UnknownRecord[])[0].operation, "APPEND_PROVENANCE");
+  }
+  assert.equal(runtime.writeAttempts(), 0);
+  assert.equal(JSON.stringify(runtime.sheets), before);
 });
 
 test("generation context is versioned, read-only, and exposes CONFIG plus registries", () => {
