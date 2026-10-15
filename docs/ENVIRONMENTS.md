@@ -17,7 +17,7 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 | | Production | Staging |
 |---|---|---|
 | MCP URL | `https://visual-identity-os-mcp-4cf7h52zxa-uc.a.run.app/mcp` | `https://staging---visual-identity-os-mcp-4cf7h52zxa-uc.a.run.app/mcp` |
-| Cloud Run revision | `visual-identity-os-mcp-00093-vuf` (v1.6.5, 100% since 2026-10-15) | tag `staging` → `00093-vuf` (move the tag on each new test deploy) |
+| Cloud Run revision | `visual-identity-os-mcp-00095-bax` (v1.6.6, 100% since 2026-10-15) | tag `staging` → `00095-bax` (move the tag on each new test deploy) |
 | Scaling | session affinity, min 1 / max 1 instance, timeout 600 s | same |
 | Apps Script (script `1Fgf6jzz…`) | deployment `AKfycbwo8sv69…` @34 | same until a new version is staged |
 | Auth0 tenant | `dev-s882ypj8vfzv2rob` (US) | same |
@@ -43,6 +43,11 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 - RIC Casa / Piscina location anchors (9) human-approved 2026-10-15 by David Cepeda in ASSET_REGISTRY.
 - Juan keeps `P0-01 Primary cuerpo sentado` by owner decision; QUALITY adds his face refs.
 
+## 1.6.6 (2026-10-15)
+
+- Reference bitmaps are re-encoded with `sharp` to JPEG, max 1536 px long edge, quality 88 (original bytes if re-encoding fails). Root cause of the Work-mode failures: ChatGPT abandoned tool results above ~8 MiB (8.67 MB = three 2 MB PNGs) with `MCP request timed out`; every working response on 2026-10-12/13 (v1.6.0, `00074-pon`) was <= 7.4 MB.
+- Validated in production: David + Juan → 2 references, 418 KB total (was ~4 MB); David + Juan + Mambo on staging → 1.1 MB response (was ~8.7 MB).
+
 ## 1.6.5 (2026-10-15)
 
 - `credit_mode` defaults to **ECONOMY** for every request; QUALITY only when asked explicitly. A David + Juan QUALITY packet (8.3 MB, 35 s) made ChatGPT Work mode abort with `MCP request timed out`; ECONOMY (5.3 MB, ~30 s, 2 Primaries ATTACHED) held both identities. Validated in production.
@@ -67,7 +72,7 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 3. Promote: `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions <revision>=100`
 4. Record the release in `DEPLOYMENT_LOG.md`.
 
-**Rollback:** `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions visual-identity-os-mcp-00091-yix=100` (v1.6.4). Then `00087-lug` (v1.6.3), `00085-naw` (v1.6.2). Then `00081-won` (v1.6.0 + session affinity). Older: `00074-pon` (v1.6.0), `00049-tc2` (v1.5.3, Apps Script @32).
+**Rollback:** `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions visual-identity-os-mcp-00093-vuf=100` (v1.6.5). Then `00091-yix` (v1.6.4), `00087-lug` (v1.6.3). Then `00081-won` (v1.6.0 + session affinity). Older: `00074-pon` (v1.6.0), `00049-tc2` (v1.5.3, Apps Script @32).
 
 ## Pending
 
