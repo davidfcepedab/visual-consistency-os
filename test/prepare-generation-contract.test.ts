@@ -1203,3 +1203,50 @@ test("location registered under a short name resolves through its alias (RIC Cas
     false
   );
 });
+
+test("one canonical Primary plus extra approved P0 angles is not ambiguous", () => {
+  const packet = prepareGenerationPacket(
+    generationInput({
+      project: "TEST-PRIMARY-PLUS-ANGLES",
+      user_instruction: "Create one photorealistic portrait of David.",
+      trace_id: "trace-primary-plus-angles",
+    }),
+    {
+      ...authoritySnapshot(),
+      config: {
+        ...authoritySnapshot().config,
+        ACTIVE_DAVID_MASTER_PACK_ID: "PACK-UNMATCHED",
+      },
+      asset_registry: [
+        {
+          asset_id: "AST-DAVID-PRIMARY",
+          subjects: "David",
+          scope: "Identity Anchor",
+          status: "PRIORITY_0_PRIMARY",
+          source_file_id: "FILE-DAVID-PRIMARY",
+          file_name: "DAVID_P0-01_PRIMARY.png",
+          approved_by: "David",
+          notes: "Priority 0 primary",
+        },
+        {
+          asset_id: "AST-DAVID-ANGLE-2",
+          subjects: "David",
+          scope: "Identity Anchor",
+          status: "PRIORITY_0_APPROVED",
+          source_file_id: "FILE-DAVID-ANGLE-2",
+          file_name: "DAVID_P0-02_ANGLE.png",
+          approved_by: "David",
+          notes: "Priority 0 extra angle",
+        },
+      ],
+      asset_index: [],
+    },
+    "trace-primary-plus-angles"
+  );
+
+  const david = packet.identity_authority.find((item) => item.subject === "David");
+  assert.equal(david?.primary_identity_anchor?.file_id, "FILE-DAVID-PRIMARY");
+  assert.equal(david?.ambiguous_identity, false);
+  assert.ok(!packet.blockers.some((b) => b.code === "AMBIGUOUS_IDENTITY_AUTHORITY"));
+  assert.ok(!packet.warnings.some((w) => w.code === "AMBIGUOUS_IDENTITY_AUTHORITY_RESOLVED"));
+});

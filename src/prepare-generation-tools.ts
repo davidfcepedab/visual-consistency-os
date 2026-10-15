@@ -1134,8 +1134,10 @@ function resolveSubjectAuthority(
     identityAnchors.find(isFacialScopeAllowed) ||
     null;
 
-  // Report AMBIGUOUS only if multiple DISTINCT physical identities verified
-  const hasAmbiguity = dedupedVerified.length > 1;
+  // Several approved P0 face angles are normal. Report AMBIGUOUS only when
+  // distinct verified identities exist and no canonical Primary can be chosen
+  // deterministically; hosts read this flag as an authority conflict.
+  const hasAmbiguity = dedupedVerified.length > 1 && !canonical?.deterministic;
   const provenanceConflict = identityAnchors.some(hasProvenanceConflictMarker);
 
   const pickRole = (role: string): VisualAnchor[] =>

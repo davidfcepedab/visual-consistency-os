@@ -74,7 +74,7 @@ app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
     ok: true,
     service: "visual-identity-os-mcp",
-    version: "1.6.3",
+    version: "1.6.4",
   });
 });
 
@@ -223,7 +223,7 @@ function createServer(): McpServer {
   const server = new McpServer(
     {
       name: "visual-identity-os",
-      version: "1.6.3",
+      version: "1.6.4",
     },
     {
       capabilities: {
