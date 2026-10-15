@@ -31,6 +31,49 @@ const completeSnapshot: OrphanSnapshot = {
   assets: [{ asset_id: "AST-001", capture_id: "CAP-001" }],
 };
 
+test("legacy result and asset links resolve through one exact Drive file without writes", () => {
+  const snapshot: OrphanSnapshot = {
+    ...completeSnapshot,
+    captures: [{ ...completeSnapshot.captures[0], file_id: "FILE-EXACT", drive_url: "https://drive.google.com/file/d/FILE-EXACT/view" }],
+    result_memory: [{ result_id: "MEM-LEGACY", asset_link: "https://drive.google.com/file/d/FILE-EXACT/view?usp=drivesdk" }],
+    assets: [{ asset_id: "AST-LEGACY", source_file_id: "FILE-EXACT" }],
+  };
+  const before = JSON.stringify(snapshot);
+  assert.deepEqual(classifyOrphans(snapshot), []);
+  assert.equal(JSON.stringify(snapshot), before);
+});
+
+test("source_capture_id is an exact lineage route but an explicit broken ID never falls back", () => {
+  const findings = classifyOrphans({
+    ...completeSnapshot,
+    captures: [{ ...completeSnapshot.captures[0], file_id: "FILE-EXACT" }],
+    assets: [
+      { asset_id: "AST-SOURCE", source_capture_id: "CAP-001" },
+      { asset_id: "AST-BROKEN", capture_id: "CAP-404", source_file_id: "FILE-EXACT" },
+    ],
+  });
+  assert.deepEqual(findings.map(item => [item.record_id, item.referenced_id, item.reference_state]), [
+    ["AST-BROKEN", "CAP-404", "BROKEN_REFERENCE"],
+  ]);
+});
+
+test("duplicate captures, conflicting file IDs and untrusted URLs remain UNKNOWN", () => {
+  const findings = classifyOrphans({
+    ...completeSnapshot,
+    captures: [
+      { ...completeSnapshot.captures[0], file_id: "FILE-DUP" },
+      { ...completeSnapshot.captures[0], capture_id: "CAP-002", file_id: "FILE-DUP" },
+    ],
+    assets: [
+      { asset_id: "AST-DUP", source_file_id: "FILE-DUP" },
+      { asset_id: "AST-CONFLICT", source_file_id: "FILE-DUP", drive_url: "https://drive.google.com/file/d/FILE-OTHER/view" },
+      { asset_id: "AST-FAKE-URL", drive_url: "https://untrusted.example/file/d/FILE-DUP/view" },
+    ],
+  });
+  assert.equal(findings.length, 3);
+  assert.ok(findings.every(item => item.reference_state === "UNKNOWN"));
+});
+
 test("visual_get_capture returns one exact capture", async () => {
   const calls: Array<{ action: string; params: Record<string, string> }> = [];
   const backend: BackendReader = async (action, params) => {

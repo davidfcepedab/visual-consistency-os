@@ -1,5 +1,6 @@
 import express from "express";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
@@ -14,6 +15,7 @@ import { generationToolResult } from "./reference-delivery.js";
 import { registerPluginSkills } from "./plugin-skills.js";
 import { McpAuthenticationError, createBearerAuthenticator, createOAuthAuthorizationRedirectUrl, createOAuthAuthorizationServerMetadata, createOAuthResourceMetadata, oauthResourceMetadataUrl, readOAuthConfiguration, } from "./mcp-auth.js";
 const PORT = Number(process.env.PORT || 8080);
+const SERVER_VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 const WEB_APP_URL = requireEnv("VISUAL_OS_WEB_APP_URL");
 const SHARED_SECRET = requireEnv("VISUAL_OS_SHARED_SECRET");
 const MCP_API_KEY = process.env.MCP_API_KEY || "";
@@ -38,7 +40,7 @@ app.get("/health", (_req, res) => {
     res.status(200).json({
         ok: true,
         service: "visual-identity-os-mcp",
-        version: "1.5.3",
+        version: SERVER_VERSION,
     });
 });
 if (OAUTH) {
@@ -133,7 +135,7 @@ app.all("/mcp", async (req, res) => {
 function createServer() {
     const server = new McpServer({
         name: "visual-identity-os",
-        version: "1.6.0",
+        version: SERVER_VERSION,
     }, {
         capabilities: {
             extensions: {
