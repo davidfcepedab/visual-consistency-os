@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import sharp from "sharp";
 import type { GenerationPacket, VisualAnchor } from "./prepare-generation-tools.js";
 
 type ReferenceImage = {
@@ -130,13 +131,48 @@ async function loadImage(
     ) {
       return null;
     }
-    return {
-      mime_type: loaded.mime_type,
-      data_base64: loaded.data_base64,
-      bytes: decodedBytes(loaded.data_base64),
-    };
+    return await downscaleReference(loaded.mime_type, loaded.data_base64);
   } catch {
     return null;
+  }
+}
+
+// Original P0 files are ~2 MB PNGs. ChatGPT abandons tool results above
+// ~8 MiB ("MCP request timed out"), and every working response on
+// 2026-10-12/13 was <= 7.4 MB, so references are re-encoded to a bounded
+// JPEG. 1536 px on the long edge keeps facial detail for the generator.
+// If re-encoding fails or does not shrink the file, the original is sent.
+const REFERENCE_MAX_EDGE = 1536;
+const REFERENCE_JPEG_QUALITY = 88;
+
+async function downscaleReference(
+  mimeType: string,
+  dataBase64: string
+): Promise<{ mime_type: string; data_base64: string; bytes: number }> {
+  const original = {
+    mime_type: mimeType,
+    data_base64: dataBase64,
+    bytes: decodedBytes(dataBase64),
+  };
+  try {
+    const output = await sharp(Buffer.from(dataBase64, "base64"))
+      .rotate()
+      .resize({
+        width: REFERENCE_MAX_EDGE,
+        height: REFERENCE_MAX_EDGE,
+        fit: "inside",
+        withoutEnlargement: true,
+      })
+      .jpeg({ quality: REFERENCE_JPEG_QUALITY })
+      .toBuffer();
+    if (output.length >= original.bytes) return original;
+    return {
+      mime_type: "image/jpeg",
+      data_base64: output.toString("base64"),
+      bytes: output.length,
+    };
+  } catch {
+    return original;
   }
 }
 
