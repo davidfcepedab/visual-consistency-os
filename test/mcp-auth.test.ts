@@ -181,3 +181,35 @@ test("valid RS256 OAuth token is accepted and wrong audience is rejected", async
   );
   await assert.rejects(authenticate(undefined), McpAuthenticationError);
 });
+
+test("OAuth allowlist accepts only listed subjects; API key is unaffected", async () => {
+  const { publicKey, privateKey } = await generateKeyPair("RS256");
+  const jwk = await exportJWK(publicKey);
+  const verificationKey = createLocalJWKSet({
+    keys: [{ ...jwk, kid: "test-key", alg: "RS256", use: "sig" }],
+  });
+  const authenticate = createBearerAuthenticator({
+    apiKey: "synthetic-api-key",
+    oauth,
+    verificationKey,
+    allowedSubjects: ["google-oauth2|owner", ""],
+  });
+  const tokenFor = (subject: string) =>
+    new SignJWT({})
+      .setProtectedHeader({ alg: "RS256", kid: "test-key" })
+      .setIssuer(oauth.issuer)
+      .setAudience(oauth.audience)
+      .setSubject(subject)
+      .setIssuedAt()
+      .setExpirationTime("5m")
+      .sign(privateKey);
+
+  const owner = await authenticate(`Bearer ${await tokenFor("google-oauth2|owner")}`);
+  assert.equal(owner.method, "oauth");
+  await assert.rejects(
+    authenticate(`Bearer ${await tokenFor("auth0|stranger")}`),
+    (error: unknown) =>
+      error instanceof McpAuthenticationError && error.reason === "subject_not_allowed"
+  );
+  assert.deepEqual(await authenticate("Bearer synthetic-api-key"), { method: "api_key" });
+});
