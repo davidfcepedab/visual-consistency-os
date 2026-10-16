@@ -12,10 +12,12 @@ Operar una tarea visual completa sin mezclar identidad, escena y autoridad regis
 1. Consultar por lectura el estado y la referencia exacta necesaria. Si el MCP no está autenticado, detener cualquier afirmación sobre estado persistente.
 2. Leer [authority-and-gates.md](references/authority-and-gates.md) y asignar a cada referencia una función limitada.
 3. Elegir un modo: diseñar prompt, generar, editar, evaluar o preparar una decisión. Combinar modos solo en ese orden.
-4. Para generar o editar, llamar `visual_prepare_generation` antes de renderizar. Si `ready_to_generate=true`, invocar en el mismo turno el generador nativo de imágenes del HOST con `final_generation_prompt` y las referencias de identidad, y devolver el bitmap. `request_id` y `READY_TO_GENERATE` son control-plane, no la imagen. No detenerse tras crear la solicitud. `visual_create_request` no genera. Este MCP no renderiza y no determina la disponibilidad del renderer del host.
-5. Leer [prompt-and-review.md](references/prompt-and-review.md) para redactar o evaluar.
-6. Inspeccionar toda imagen objetivo antes de editarla o calificarla.
-7. Presentar hechos, inferencias, riesgos y máximo tres acciones.
+4. Si el usuario da un `request_id` existente, llamar una sola vez `visual_execute_request` con ese ID exacto y `credit_mode=ECONOMY`, salvo que pida explícitamente máxima calidad. No hacer lecturas exploratorias previas, reconstruir la escena ni crear una solicitud duplicada. Para un prompt nuevo, llamar `visual_prepare_generation` antes de renderizar.
+5. Exigir `reference_delivery.status=ATTACHED` para toda identidad principal. Usar las imágenes adjuntas por el MCP como referencias visuales reales; una URL o nombre de archivo no cuenta como entrega física.
+6. Si `ready_to_generate=true`, invocar una sola vez en el mismo turno el generador nativo de imágenes del HOST con `final_generation_prompt` y las imágenes autorizadas adjuntas, y entregar exactamente un bitmap. No reintentar automáticamente. `request_id` y `READY_TO_GENERATE` son control-plane, no la imagen. `visual_create_request` no genera.
+7. Leer [prompt-and-review.md](references/prompt-and-review.md) para redactar o evaluar.
+8. Inspeccionar toda imagen objetivo antes de editarla o calificarla.
+9. Presentar hechos, inferencias, riesgos y máximo tres acciones.
 
 ## Contrato
 

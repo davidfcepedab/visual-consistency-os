@@ -1,6 +1,6 @@
 {
   "name": "visual-identity-os-mcp",
-  "version": "1.5.3",
+  "version": "1.6.9",
   "private": true,
   "type": "module",
   "engines": {
@@ -13,9 +13,10 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "express": "^5.1.0",
     "jose": "6.2.4",
+    "sharp": "0.34.3",
     "zod": "^4.0.0"
   },
   "devDependencies": {

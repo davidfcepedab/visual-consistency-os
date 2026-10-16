@@ -177,7 +177,7 @@ test("T3: EDIT with valid base_capture_id preserves EDIT mode", () => {
 });
 
 // ===== TEST 4: EDIT without base → blocker (no fallback) =====
-test("T4: EDIT without base_capture_id blocks generation (no fallback)", () => {
+test("T4: EDIT without a registered base normalizes to GENERATE with warning (owner decision 2026-10-15)", () => {
   const snapshot = testSnapshot();
   const packet = prepareGenerationPacket(
     PrepareGenerationInputSchema.parse({
@@ -186,19 +186,45 @@ test("T4: EDIT without base_capture_id blocks generation (no fallback)", () => {
       user_instruction: "Adjust colors",
       scene: "",
       generator: "CHATGPT_IMAGE",
-      mode: "EDIT", // ← no base_capture_id
+      mode: "EDIT", // ← no base_capture_id: image attached in the host chat
       iteration: 1,
     }),
     snapshot,
     "trace-t4-001"
   );
 
-  assert.equal(packet.mode, "EDIT", "mode should stay EDIT");
-  assert(!packet.ready_to_generate, "should not be ready without base");
+  assert.equal(packet.mode, "GENERATE", "mode should normalize to GENERATE");
+  assert(packet.ready_to_generate, "should be ready with P0 identity");
   assert(
-    packet.blockers.some((b) => b.code === "MISSING_EDIT_BASE"),
-    "should have MISSING_EDIT_BASE blocker"
+    !packet.blockers.some((b) => b.code === "MISSING_EDIT_BASE"),
+    "should not block on a missing registered base"
   );
+  assert(
+    packet.warnings.some((w) => w.code === "MODE_NORMALIZED"),
+    "should warn that the mode was normalized"
+  );
+  assert(packet.auto_resolutions?.includes("MODE_EDIT_TO_GENERATE"));
+});
+
+test("T4b: EDIT with an unknown base_capture_id still blocks", () => {
+  const snapshot = testSnapshot();
+  const packet = prepareGenerationPacket(
+    PrepareGenerationInputSchema.parse({
+      project: "TEST",
+      subjects: ["David"],
+      user_instruction: "Adjust colors",
+      scene: "",
+      generator: "CHATGPT_IMAGE",
+      mode: "EDIT",
+      base_capture_id: "CAP-DOES-NOT-EXIST",
+      iteration: 1,
+    }),
+    snapshot,
+    "trace-t4b-001"
+  );
+
+  assert(!packet.ready_to_generate, "an invalid base must keep blocking");
+  assert(packet.blockers.some((b) => b.code === "INVALID_BASE_CAPTURE"));
 });
 
 // ===== TEST 5: Reference delivery minimum (ECONOMY mode implicit) =====

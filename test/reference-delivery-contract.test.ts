@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { generationToolResult } from "../src/reference-delivery.js";
+import { generationToolResult, resolveDeliveryMode } from "../src/reference-delivery.js";
 import { selectDeliveryAnchors } from "../src/reference-selection.js";
 import type { GenerationPacket, VisualAnchor } from "../src/prepare-generation-tools.js";
 
@@ -229,4 +229,32 @@ test("three subjects keep one primary each and do not add complements", () => {
     "Juan-PRIMARY",
     "Mambo-PRIMARY",
   ]);
+});
+
+test("without credit_mode every request gets ECONOMY; an explicit mode wins", () => {
+  assert.equal(resolveDeliveryMode(), "ECONOMY");
+  assert.equal(resolveDeliveryMode("QUALITY"), "QUALITY");
+  assert.equal(resolveDeliveryMode("ECONOMY"), "ECONOMY");
+});
+
+test("large reference bitmaps are downscaled to a bounded JPEG", async () => {
+  const sharp = (await import("sharp")).default;
+  const big = await sharp({
+    create: { width: 3000, height: 4000, channels: 3, background: "#7a5c4f" },
+  })
+    .png({ compressionLevel: 0 })
+    .toBuffer();
+  const result = await generationToolResult(packet(), [], async () => ({
+    ok: true, mime_type: "image/png", data_base64: big.toString("base64"),
+  }));
+  const delivery = (result.structuredContent as {
+    reference_delivery: { status: string; total_bytes: number; manifest: { mime_type: string }[] };
+  }).reference_delivery;
+  assert.equal(delivery.status, "ATTACHED");
+  assert.equal(delivery.manifest[0].mime_type, "image/jpeg");
+  assert.ok(delivery.total_bytes < big.length / 10);
+  const meta = await sharp(Buffer.from(
+    (result.content.find((c) => c.type === "image") as { data: string }).data, "base64"
+  )).metadata();
+  assert.ok(Math.max(meta.width || 0, meta.height || 0) <= 1536);
 });

@@ -120,7 +120,14 @@ export function createBearerAuthenticator(input: {
   apiKey: string;
   oauth?: OAuthConfiguration;
   verificationKey?: JWTVerifyGetKey;
+  // When set, OAuth tokens are accepted only for these Auth0 user ids
+  // (`sub`). Dynamically registered clients (e.g. Grok) can then be granted
+  // API access without opening the MCP to any account in the tenant.
+  allowedSubjects?: string[];
 }) {
+  const allowedSubjects = new Set(
+    (input.allowedSubjects || []).map((subject) => subject.trim()).filter(Boolean)
+  );
   const verificationKey =
     input.verificationKey ??
     (input.oauth
@@ -143,16 +150,23 @@ export function createBearerAuthenticator(input: {
       throw new McpAuthenticationError();
     }
 
+    let verified: Awaited<ReturnType<typeof jwtVerify>>;
     try {
-      const verified = await jwtVerify(token, verificationKey, {
+      verified = await jwtVerify(token, verificationKey, {
         issuer: input.oauth.issuer,
         audience: input.oauth.audience,
         algorithms: ["RS256"],
       });
-      return { method: "oauth", payload: verified.payload };
     } catch (error) {
       throw new McpAuthenticationError(authenticationFailureReason(error));
     }
+    if (
+      allowedSubjects.size > 0 &&
+      !allowedSubjects.has(String(verified.payload.sub || ""))
+    ) {
+      throw new McpAuthenticationError("subject_not_allowed");
+    }
+    return { method: "oauth", payload: verified.payload };
   };
 }
 

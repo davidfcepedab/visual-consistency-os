@@ -84,6 +84,12 @@ export const PlanLibraryReconciliationInputSchema = z.object({
   trace_id: TraceIdSchema.optional(),
 });
 
+export const GetLibraryScanPageInputSchema = z.object({
+  cursor: z.string().min(1).max(250000).optional(),
+  limit: z.number().int().min(1).max(500).default(200),
+  trace_id: TraceIdSchema.optional(),
+});
+
 type SafeSuccess<T extends UnknownRecord> = { ok: true; trace_id: string } & T;
 type SafeResult<T extends UnknownRecord> = SafeSuccess<T> | StructuredErrorResponse;
 
@@ -121,6 +127,13 @@ function candidateCategory(path: string): string {
   if (path.includes("/05. Inspiration/")) return "INSPIRATION_CANDIDATE";
   if (path.includes("/90. Archive/")) return "ARCHIVE_CANDIDATE";
   return "NEEDS_REVIEW";
+}
+
+const P0_REFERENCE_STATUSES = new Set(["PRIORITY_0_PRIMARY", "PRIORITY_0_APPROVED"]);
+
+function isTraceableP0Reference(asset: Record<string, unknown>): boolean {
+  return P0_REFERENCE_STATUSES.has(normalizeStatus(asset.status)) &&
+    normalizeStatus(asset.provenance_state) === "APPROVAL_TRACEABLE";
 }
 
 export function planLibraryReconciliation(
@@ -217,6 +230,10 @@ export function planLibraryReconciliation(
       normalizeStatus(asset.provenance_state)
     );
     if (!approved || (!notCleared && !provenanceOpen)) continue;
+    // identity_clearance is a publish-ready gate for generated results
+    // (Integration Contracts V2). It does not apply to approved P0 identity
+    // references with traceable provenance, so NOT_CLEARED alone is not a conflict there.
+    if (isTraceableP0Reference(asset) && !provenanceOpen) continue;
     findings.push({
       category: "ASSET_STATE_CONFLICT",
       record_type: "ASSET",
@@ -257,6 +274,23 @@ export function planLibraryReconciliation(
   return [...unique.values()].sort((left, right) =>
     `${left.category}|${left.record_id}`.localeCompare(`${right.category}|${right.record_id}`)
   );
+}
+
+export function summarizeLibraryFindings(items: LibraryFinding[]) {
+  const byCategory: Record<string, number> = {};
+  const bySeverity: Record<string, number> = {};
+  const recordIds = new Set<string>();
+  for (const item of items) {
+    byCategory[item.category] = (byCategory[item.category] || 0) + 1;
+    bySeverity[item.severity] = (bySeverity[item.severity] || 0) + 1;
+    recordIds.add(`${item.record_type}|${item.record_id}`);
+  }
+  return { scope: "FULL_SCAN_FINDINGS", total_findings: items.length,
+    unique_records: recordIds.size, by_category: byCategory, by_severity: bySeverity,
+    broken_drive_references: byCategory.BROKEN_DRIVE_REFERENCE || 0,
+    state_conflicts_requiring_review: byCategory.ASSET_STATE_CONFLICT || 0,
+    duplicate_name_policy: "CANDIDATE_ONLY_NOT_DUPLICATE_CONTENT",
+    state_conflict_policy: "APPROVAL_AND_CLEARANCE_ARE_SEPARATE_NO_AUTOMATIC_RECLASSIFICATION" };
 }
 
 function paginate<T>(items: T[], cursor: string | undefined, limit: number, revision: string) {
@@ -405,6 +439,30 @@ export function createLibraryMaintenanceHandlers(backend: BackendReader) {
   }
 
   return {
+    async getLibraryScanPage(rawInput: z.input<typeof GetLibraryScanPageInputSchema>) {
+      const parsed = GetLibraryScanPageInputSchema.safeParse(rawInput);
+      const traceId = createTraceId(parsed.success ? parsed.data.trace_id : undefined);
+      if (!parsed.success) return structuredError("INVALID_ARGUMENT", "Library page input is invalid", traceId);
+      try {
+        const response = await backend("library_snapshot", {
+          trace_id: traceId, page_size: String(parsed.data.limit),
+          ...(parsed.data.cursor ? { cursor: parsed.data.cursor } : {}),
+        });
+        if (!isRecord(response) || response.ok !== true ||
+            typeof response.scan_id !== "string" || typeof response.revision !== "string" ||
+            !Array.isArray(response.files) || response.files.some(file => !isRecord(file) || !isLibraryFileRecord(file)) ||
+            typeof response.complete !== "boolean" ||
+            (!response.complete && (typeof response.next_cursor !== "string" || !response.next_cursor))) {
+          return structuredError("BACKEND_PROTOCOL_ERROR", "Invalid library scan page", traceId);
+        }
+        return { ...response, ok: true as const, trace_id: traceId,
+          next_cursor: response.next_cursor,
+          read_only: true, write_count: 0,
+          coverage: response.complete ? "COMPLETE" : "PARTIAL",
+          // Caller must accumulate all pages of the same scan/revision.
+          result_scope: "ONE_SOURCE_PAGE", automatic_continuation: false };
+      } catch (error) { return handlerError(error, traceId); }
+    },
     async listLibraryInventory(rawInput: z.input<typeof ListLibraryInventoryInputSchema>): Promise<
       SafeResult<{ revision: string; scan?: LibraryMaintenanceSnapshot["scan"]; items: LibraryFileRecord[]; total: number; next_cursor?: string }>
     > {
@@ -430,7 +488,7 @@ export function createLibraryMaintenanceHandlers(backend: BackendReader) {
     },
 
     async planLibraryReconciliation(rawInput: unknown): Promise<
-      SafeResult<{ revision: string; scan?: LibraryMaintenanceSnapshot["scan"]; dry_run: true; write_count: 0; items: LibraryFinding[]; total: number; next_cursor?: string }>
+      SafeResult<{ revision: string; scan?: LibraryMaintenanceSnapshot["scan"]; dry_run: true; write_count: 0; summary: ReturnType<typeof summarizeLibraryFindings>; items: LibraryFinding[]; total: number; next_cursor?: string }>
     > {
       const parsed = PlanLibraryReconciliationInputSchema.safeParse(rawInput);
       const traceId = createTraceId(parsed.success ? parsed.data.trace_id : undefined);
@@ -441,8 +499,9 @@ export function createLibraryMaintenanceHandlers(backend: BackendReader) {
       try {
         const snapshot = await readCachedSnapshot(traceId, parsed.data.force_refresh);
         const cursorRevision = `${snapshot.revision}:${snapshot.scan?.scan_id}`;
-        const page = paginate(planLibraryReconciliation(snapshot), parsed.data.cursor, parsed.data.limit, cursorRevision);
-        return { ok: true, trace_id: traceId, revision: snapshot.revision, scan: snapshot.scan, dry_run: true, write_count: 0, ...page };
+        const findings = planLibraryReconciliation(snapshot);
+        const page = paginate(findings, parsed.data.cursor, parsed.data.limit, cursorRevision);
+        return { ok: true, trace_id: traceId, revision: snapshot.revision, scan: snapshot.scan, dry_run: true, write_count: 0, summary: summarizeLibraryFindings(findings), ...page };
       } catch (error) {
         return handlerError(error, traceId);
       }
