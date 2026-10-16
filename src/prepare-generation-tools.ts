@@ -25,6 +25,7 @@ export const PrepareGenerationInputSchema = z.object({
   source_result_id: z.string().trim().max(128).optional().default(""),
   iteration: z.number().int().min(1).max(999).optional().default(1),
   required_anchor_ids: z.array(z.string().trim().min(1).max(128)).max(20).optional(),
+  credit_mode: z.enum(["ECONOMY", "QUALITY"]).optional(),
   trace_id: TraceIdSchema.optional(),
 });
 
@@ -164,6 +165,8 @@ export type GenerationPacket = {
   allowed_use: string[];
   prohibited_use: string[];
   final_generation_prompt: string;
+  scene_text?: string;
+  credit_mode?: "ECONOMY" | "QUALITY";
   reference_files: VisualAnchor[];
   blockers: Blocker[];
   warnings: GenerationWarning[];
@@ -515,6 +518,33 @@ function nameTokens(value: string): string[] {
     .map((token) => token.trim())
     .filter(Boolean);
 }
+
+const LOCATION_MATCH_STOPLIST = new Set([
+  "david",
+  "juan",
+  "mambo",
+  "couple",
+  "together",
+  "natural",
+  "portrait",
+  "photograph",
+  "identity",
+  "priority",
+  "anchor",
+  "reference",
+  "subject",
+  "scene",
+  "light",
+  "camera",
+  "photo",
+  "image",
+  "approved",
+  "primary",
+  "frontal",
+  "support",
+  "master",
+  "pack",
+]);
 
 function matchesSubject(record: UnknownRecord, subject: string): boolean {
   if (isCoupleRecord(record) && subject !== "Couple") return false;
@@ -1127,11 +1157,13 @@ function sceneAnchors(
       if (recordProject && project && recordProject === project) return true;
       const labels = [
         field(record, "file_name", "Asset", "name"),
-        field(record, "Folder", "folder", "scene", "notes", "Notes"),
         field(record, "asset_id"),
       ].join(" ");
       return nameTokens(labels).some(
-        (token) => token.length >= 5 && haystack.includes(token)
+        (token) =>
+          token.length >= 5 &&
+          !LOCATION_MATCH_STOPLIST.has(token) &&
+          haystack.includes(token)
       );
     })
     .map(({ record, source }) => toAnchor(record, source));
@@ -1262,6 +1294,11 @@ function buildPrompt(input: {
         " Do not blend this face with any other subject."
     );
   }
+
+  lines.push(
+    "",
+    "IDENTITY VERSUS SCENE: Attached face references establish identity only. Do not copy their pose, wardrobe, background, or expression. A complementary face reference informs facial volume and angle only. A body reference is not a face. A location reference is not a face. A couple reference controls distance, scale, and pose only."
+  );
 
   if (input.subjects.includes("David") && input.subjects.includes("Juan")) {
     const couple = input.relationship[0];
@@ -1576,6 +1613,8 @@ export function prepareGenerationPacket(
     allowed_use: allowed,
     prohibited_use: prohibited,
     final_generation_prompt: prompt,
+    scene_text: `${parsed.scene || ""} ${parsed.user_instruction}`.trim(),
+    credit_mode: parsed.credit_mode || "ECONOMY",
     reference_files: uniqueRefs,
     blockers,
     warnings,
@@ -1719,6 +1758,7 @@ export function createPrepareGenerationHandlers(input: {
             source_result_id: sourceResultId,
             iteration: Number(field(existing, "iteration") || 1),
             required_anchor_ids: parsed.data.required_anchor_ids,
+            credit_mode: parsed.data.credit_mode,
             trace_id: traceId,
           }),
           response.snapshot,

@@ -1,4 +1,5 @@
 import type { GenerationPacket, VisualAnchor } from "./prepare-generation-tools.js";
+import { selectDeliveryAnchors } from "./reference-selection.js";
 
 type ReferenceImage = {
   file_id: string;
@@ -16,31 +17,7 @@ function selectReferences(
   packet: GenerationPacket,
   requiredIds: string[]
 ): { selected: VisualAnchor[]; unresolvedRequiredIds: string[] } {
-  const selected: VisualAnchor[] = [];
-  const seen = new Set<string>();
-  const add = (anchor: VisualAnchor | null | undefined) => {
-    if (!anchor?.file_id || seen.has(anchor.file_id)) return;
-    seen.add(anchor.file_id);
-    selected.push(anchor);
-  };
-
-  packet.identity_authority.forEach((authority) =>
-    add(authority.primary_identity_anchor)
-  );
-
-  const unresolvedRequiredIds: string[] = [];
-  for (const id of requiredIds) {
-    const anchor = packet.reference_files.find(
-      (candidate) => candidate.file_id === id || candidate.asset_id === id
-    );
-    if (!anchor?.file_id) {
-      unresolvedRequiredIds.push(id);
-      continue;
-    }
-    add(anchor);
-  }
-
-  return { selected, unresolvedRequiredIds };
+  return selectDeliveryAnchors(packet, requiredIds);
 }
 
 function textContent(value: unknown) {
