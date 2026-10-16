@@ -89,7 +89,7 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 
 1. **Source of truth for v1.6.0:** resolved 2026-10-14. Branch `release/v1.6.0-production` (from `origin/main`) holds the exact source deployed in revision `00074-pon`; build OK, 116/116 tests. Merge it into `main` and deploy only from `main` from now on.
 2. **v1.7.0:** lives on `fix/detector-p0-clearance` (based on older code, lacks `generator-handoff.ts`); Apps Script @33 exists, never deployed to Cloud Run. Rebase onto `release/v1.6.0-production`, then stage → validate → promote.
-3. **Grok:** only supports dynamic client registration. Needs an Auth0 post-login Action allowlist plus default third-party grant on the Visual API before connecting. Do not retry Grok until then (each attempt creates an Auth0 app; tenant limit is 10).
+3. **Grok (resolved 2026-10-16):** connected through its own dynamically registered third-party app. Visual API → Default permissions for third-party apps: User-delegated = Authorized, Client Access = Unauthorized; protected by `OAUTH_ALLOWED_SUBJECTS`. Do not delete `tpc_pvfCa55R56PFUFpDdSw3nC`. Original note: Grok only supports dynamic client registration. Needs an Auth0 post-login Action allowlist plus default third-party grant on the Visual API before connecting. Do not retry Grok until then (each attempt creates an Auth0 app; tenant limit is 10).
 4. **Cleanup:** old Cloud Run tags removed 2026-10-14 (only production + `staging` remain; old revisions kept and can be re-tagged). Still pending: archive unused Apps Script deployments (15 listed by `clasp deployments`). Auth0 cleanup done 2026-10-14: tenant now holds only `OWN · Visual · Public PKCE`, `FIT · ChatGPT · DCR 1/2` and the system app; APIs `OWN · Visual · API`, `Braincell FIT`, Management API.
 5. **Auth0 hardening:** disable Username-Password on the public client; move `VISUAL_OS_SHARED_SECRET` and `MCP_API_KEY` from plain env vars to Secret Manager and rotate them.
 6. ~~`/health` version mismatch~~ fixed in 1.6.1 (still hardcoded; bump both strings on release).
@@ -104,7 +104,7 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 | ChatGPT | OWN · Visual Consistency OS → production | ✔ |
 | Claude | OWN · Visual Consistency OS → production | ✔ |
 | Codex | production URL | ✔ |
-| Grok | — | blocked until allowlist (pending #3) |
+| Grok | OWN · Visual Consistency OS → production (Auth0 third-party app `tpc_pvfCa55R56PFUFpDdSw3nC`, connected 2026-10-16) | ✔ tools; image identity not yet verified |
 | Gemini | — | not configured |
 
 ## Data backlog (pre-existing, found by read-only audit 2026-10-14)
