@@ -17,7 +17,7 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 | | Production | Staging |
 |---|---|---|
 | MCP URL | `https://visual-identity-os-mcp-4cf7h52zxa-uc.a.run.app/mcp` | `https://staging---visual-identity-os-mcp-4cf7h52zxa-uc.a.run.app/mcp` |
-| Cloud Run revision | `visual-identity-os-mcp-00097-rik` (v1.6.7, 100% since 2026-10-15) | tag `staging` → `00097-rik` (move the tag on each new test deploy) |
+| Cloud Run revision | `visual-identity-os-mcp-00099-fuw` (v1.6.8, 100% since 2026-10-16) | tag `staging` → `00099-fuw` (move the tag on each new test deploy) |
 | Scaling | session affinity, min 1 / max 1 instance, timeout 600 s | same |
 | Apps Script (script `1Fgf6jzz…`) | deployment `AKfycbwo8sv69…` @34 | same until a new version is staged |
 | Auth0 tenant | `dev-s882ypj8vfzv2rob` (US) | same |
@@ -42,6 +42,12 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 - `credit_mode` defaults to **QUALITY**: up to 6 references / 15 MB, extra face angles shared round-robin across subjects, plus one location. Pass `credit_mode: ECONOMY` for a lighter response. Validated on REQ-20261014-183009-7B6960: 6 refs (David 3, Juan 2, RIC Casa 1), 9.2 MB.
 - RIC Casa / Piscina location anchors (9) human-approved 2026-10-15 by David Cepeda in ASSET_REGISTRY.
 - Juan keeps `P0-01 Primary cuerpo sentado` by owner decision; QUALITY adds his face refs.
+
+## 1.6.8 (2026-10-16)
+
+- `OAUTH_ALLOWED_SUBJECTS` (comma-separated Auth0 user ids) restricts OAuth tokens to the owner: `google-oauth2|117418455041632079055`. Other subjects get 401 `subject_not_allowed`; the API key path is unchanged. Set with `--update-env-vars`; it lives in the service template, so later deploys keep it.
+- Purpose: Grok only connects through dynamic client registration (it ignored the manual Client ID and created `tpc_…` apps). With the allowlist, Grok's registered app can be granted access to the Visual API without opening the MCP to every tenant account.
+- Validated in production: Claude connector (OAuth) → 200 on `00099-fuw`. Promotion with min/max 1 instance caused ~40 s of 503 while the instance swapped.
 
 ## 1.6.7 (2026-10-15)
 
@@ -77,7 +83,7 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 3. Promote: `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions <revision>=100`
 4. Record the release in `DEPLOYMENT_LOG.md`.
 
-**Rollback:** `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions visual-identity-os-mcp-00095-bax=100` (v1.6.6). Then `00093-vuf` (v1.6.5), `00091-yix` (v1.6.4). Then `00081-won` (v1.6.0 + session affinity). Older: `00074-pon` (v1.6.0), `00049-tc2` (v1.5.3, Apps Script @32).
+**Rollback:** `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions visual-identity-os-mcp-00097-rik=100` (v1.6.7, no allowlist). Then `00095-bax` (v1.6.6), `00093-vuf` (v1.6.5). Then `00081-won` (v1.6.0 + session affinity). Older: `00074-pon` (v1.6.0), `00049-tc2` (v1.5.3, Apps Script @32).
 
 ## Pending
 
