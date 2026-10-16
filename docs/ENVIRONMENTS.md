@@ -17,7 +17,7 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 | | Production | Staging |
 |---|---|---|
 | MCP URL | `https://visual-identity-os-mcp-4cf7h52zxa-uc.a.run.app/mcp` | `https://staging---visual-identity-os-mcp-4cf7h52zxa-uc.a.run.app/mcp` |
-| Cloud Run revision | `visual-identity-os-mcp-00099-fuw` (v1.6.8, 100% since 2026-10-16) | tag `staging` → `00099-fuw` (move the tag on each new test deploy) |
+| Cloud Run revision | `visual-identity-os-mcp-00102-vid` (v1.6.9, 100% since 2026-10-16) | tag `staging` → `00102-vid` (move the tag on each new test deploy) |
 | Scaling | session affinity, min 1 / max 1 instance, timeout 600 s | same |
 | Apps Script (script `1Fgf6jzz…`) | deployment `AKfycbwo8sv69…` @34 | same until a new version is staged |
 | Auth0 tenant | `dev-s882ypj8vfzv2rob` (US) | same |
@@ -42,6 +42,13 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 - `credit_mode` defaults to **QUALITY**: up to 6 references / 15 MB, extra face angles shared round-robin across subjects, plus one location. Pass `credit_mode: ECONOMY` for a lighter response. Validated on REQ-20261014-183009-7B6960: 6 refs (David 3, Juan 2, RIC Casa 1), 9.2 MB.
 - RIC Casa / Piscina location anchors (9) human-approved 2026-10-15 by David Cepeda in ASSET_REGISTRY.
 - Juan keeps `P0-01 Primary cuerpo sentado` by owner decision; QUALITY adds his face refs.
+
+## 1.6.9 (2026-10-16)
+
+- Ported main `7f59df3` (PR #12, role-based reference selector, `src/reference-selection.ts`) onto the 1.6.x line as `450902a`. QUALITY: one complementary angle per person (no glasses, no second frontal, no hoodie/tank angles in beach/pool scenes), a scene-matched location, then couple or body reference, cap 6. ECONOMY: primaries only (no automatic room; v1.6.1 attached one).
+- Kept from 1.6.x: 1536 px JPEG downscale, ECONOMY default, stored required IDs on execute, approved location aliases (now also filtered by the stoplist), `OAUTH_ALLOWED_SUBJECTS`. Primaries and required references are mandatory; role-based extras are optional.
+- Validated on staging with David + Juan: ECONOMY 2 refs / 408 KB; QUALITY 4 refs / 922 KB (David three-quarter + Couple; Juan has no beach-safe complement). Production: Claude OAuth 200 on `00102-vid`.
+- Source of truth: `main` (1.5.3 + PR #12) is behind this branch. Build `f9660ec4` from main created revision `00066-c65` (0% traffic, untagged) — never route traffic to it. Merge `release/v1.6.0-production` into `main` before deploying from `main` again.
 
 ## 1.6.8 (2026-10-16)
 
@@ -83,7 +90,7 @@ Last updated: 2026-10-14. Display name: **OWN · Visual Consistency OS** (techni
 3. Promote: `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions <revision>=100`
 4. Record the release in `DEPLOYMENT_LOG.md`.
 
-**Rollback:** `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions visual-identity-os-mcp-00097-rik=100` (v1.6.7, no allowlist). Then `00095-bax` (v1.6.6), `00093-vuf` (v1.6.5). Then `00081-won` (v1.6.0 + session affinity). Older: `00074-pon` (v1.6.0), `00049-tc2` (v1.5.3, Apps Script @32).
+**Rollback:** `gcloud run services update-traffic visual-identity-os-mcp --region us-central1 --to-revisions visual-identity-os-mcp-00099-fuw=100` (v1.6.8). Then `00097-rik` (v1.6.7, no allowlist), `00095-bax` (v1.6.6). Then `00081-won` (v1.6.0 + session affinity). Older: `00074-pon` (v1.6.0), `00049-tc2` (v1.5.3, Apps Script @32).
 
 ## Pending
 
