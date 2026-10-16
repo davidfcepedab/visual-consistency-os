@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import sharp from "sharp";
 import type { GenerationPacket, VisualAnchor } from "./prepare-generation-tools.js";
+import { selectDeliveryAnchors } from "./reference-selection.js";
 
 type ReferenceImage = {
   file_id: string;
@@ -14,13 +15,12 @@ type ReferenceLoader = (fileId: string) => Promise<unknown>;
 
 export type ReferenceDeliveryMode = "ECONOMY" | "QUALITY";
 
-// ECONOMY (default) sends the mandatory set: each subject's Primary, one
-// matched location and explicitly required references. QUALITY adds verified
-// extra face angles, shared round-robin across subjects, up to
-// QUALITY_MAX_REFERENCES and MAX_TOTAL_BYTES, only when credit_mode asks for
-// it. A two-subject QUALITY packet (8.3 MB) timed out in ChatGPT Work mode on
-// 2026-10-15, while ECONOMY (5.6 MB) held both identities.
-const QUALITY_MAX_REFERENCES = 6;
+// Selection is role-based (reference-selection.ts). ECONOMY (default) sends
+// each subject's Primary plus explicitly required references. QUALITY, only
+// when credit_mode asks for it, adds one complementary face angle per person,
+// a scene-matched location and a couple or body reference, capped at
+// DELIVERY_CAP. Primaries and required references are mandatory; the
+// role-based extras are optional and are skipped, not blocking, if they fail.
 const MAX_REFERENCE_BYTES = 5 * 1024 * 1024;
 const MAX_TOTAL_BYTES: Record<ReferenceDeliveryMode, number> = {
   ECONOMY: 8 * 1024 * 1024,
@@ -33,80 +33,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function selectReferences(
   packet: GenerationPacket,
-  requiredIds: string[]
-): { selected: VisualAnchor[]; unresolvedRequiredIds: string[] } {
-  const selected: VisualAnchor[] = [];
-  const seen = new Set<string>();
-  const add = (anchor: VisualAnchor | null | undefined) => {
-    if (!anchor?.file_id || seen.has(anchor.file_id)) return;
-    seen.add(anchor.file_id);
-    selected.push(anchor);
-  };
-
-  packet.identity_authority.forEach((authority) =>
-    add(authority.primary_identity_anchor)
-  );
-  // A matched location is part of what the scene must reproduce, so attach
-  // one approved Room Anchor even in ECONOMY instead of relying on text.
-  add(packet.location_anchors?.[0]);
-
-  const unresolvedRequiredIds: string[] = [];
-  for (const id of requiredIds) {
-    const anchor = packet.reference_files.find(
-      (candidate) => candidate.file_id === id || candidate.asset_id === id
-    );
-    if (!anchor?.file_id) {
-      unresolvedRequiredIds.push(id);
-      continue;
-    }
-    add(anchor);
-  }
-
-  return { selected, unresolvedRequiredIds };
-}
-
-function selectOptionalReferences(
-  packet: GenerationPacket,
-  mandatory: VisualAnchor[],
+  requiredIds: string[],
   mode: ReferenceDeliveryMode
-): VisualAnchor[] {
-  if (mode !== "QUALITY") return [];
-  const seen = new Set(mandatory.map((anchor) => anchor.file_id));
-  const optional: VisualAnchor[] = [];
-  const take = (anchor: VisualAnchor | undefined): boolean => {
-    if (mandatory.length + optional.length >= QUALITY_MAX_REFERENCES) return false;
-    if (!anchor?.file_id || seen.has(anchor.file_id)) return true;
-    if (anchor.verification_status !== "VERIFIED_SOURCE") return true;
-    seen.add(anchor.file_id);
-    optional.push(anchor);
-    return true;
-  };
-
-  // Extra face angles are shared round-robin across subjects, so one subject
-  // with many approved P0 references cannot crowd out the others.
-  const queues = packet.identity_authority.map((authority) => [
-    ...(authority.priority_0_refs || []),
-  ]);
-  let added = true;
-  while (added) {
-    added = false;
-    for (const queue of queues) {
-      while (queue.length) {
-        const anchor = queue.shift()!;
-        const before = optional.length;
-        if (!take(anchor)) return optional;
-        if (optional.length > before) {
-          added = true;
-          break;
-        }
-      }
+): {
+  selected: VisualAnchor[];
+  optional: VisualAnchor[];
+  unresolvedRequiredIds: string[];
+} {
+  const { selected: chosen, unresolvedRequiredIds } = selectDeliveryAnchors(
+    { ...packet, credit_mode: mode },
+    requiredIds
+  );
+  const mandatoryIds = new Set<string>();
+  packet.identity_authority.forEach((authority) => {
+    const id = authority.primary_identity_anchor?.file_id;
+    if (id) mandatoryIds.add(id);
+  });
+  for (const anchor of chosen) {
+    if (requiredIds.includes(anchor.file_id!) || requiredIds.includes(anchor.asset_id)) {
+      mandatoryIds.add(anchor.file_id!);
     }
   }
-
-  for (const anchor of packet.reference_files) {
-    if (!take(anchor)) break;
-  }
-  return optional;
+  return {
+    selected: chosen.filter((anchor) => mandatoryIds.has(anchor.file_id!)),
+    optional: chosen.filter((anchor) => !mandatoryIds.has(anchor.file_id!)),
+    unresolvedRequiredIds,
+  };
 }
 
 function decodedBytes(dataBase64: string): number {
@@ -196,11 +148,12 @@ export async function generationToolResult(
   }
 
   const packet = value as GenerationPacket;
-  const mode = resolveDeliveryMode(requestedMode);
-  const { selected, unresolvedRequiredIds } = selectReferences(packet, [
-    ...new Set([...requiredIds, ...(packet.required_reference_ids || [])]),
-  ]);
-  const optional = selectOptionalReferences(packet, selected, mode);
+  const mode = resolveDeliveryMode(requestedMode || packet.credit_mode);
+  const { selected, optional, unresolvedRequiredIds } = selectReferences(
+    packet,
+    [...new Set([...requiredIds, ...(packet.required_reference_ids || [])])],
+    mode
+  );
   const maxTotalBytes = MAX_TOTAL_BYTES[mode];
   const images: ReferenceImage[] = [];
   const failed: string[] = [];

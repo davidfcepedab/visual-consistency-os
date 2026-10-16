@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { generationToolResult, resolveDeliveryMode } from "../src/reference-delivery.js";
+import { selectDeliveryAnchors } from "../src/reference-selection.js";
 import type { GenerationPacket, VisualAnchor } from "../src/prepare-generation-tools.js";
 
 function anchor(fileId: string): VisualAnchor {
@@ -105,34 +106,129 @@ test("blocks when an explicitly required id cannot resolve to a physical referen
   );
 });
 
-test("QUALITY shares extra face references across subjects and attaches the location", async () => {
+function face(fileId: string, name: string, subject: string): VisualAnchor {
+  return {
+    asset_id: `AST-${fileId}`,
+    subject,
+    role: "Identity Anchor",
+    file_id: fileId,
+    file_name: name,
+    allowed_use: [],
+    prohibited_use: [],
+    source: "ASSET_INDEX",
+    verification_status: "VERIFIED_SOURCE",
+  };
+}
+
+test("QUALITY selects one complementary angle per person and skips glasses and a second frontal", () => {
+  const davidPrimary = face("DAVID-PRIMARY", "David | P0-01 | Primary cara frontal | 025.png", "David");
+  const davidFront = face("DAVID-FRONT-2", "David | P0-02 | Cara frontal close hoodie | 019.png", "David");
+  const davidQuarter = face("DAVID-QUARTER", "David | P0-07 | Cara tres cuartos terraza | 041.png", "David");
+  const juanPrimary = face("JUAN-PRIMARY", "Juan | P0-01 | Primary cuerpo sentado tank negra | 011.png", "Juan");
+  const juanGlasses = face("JUAN-GLASSES", "Juan | P0-07 | Cara tres cuartos lentes hoodie navy | 010.png", "Juan");
+  const juanSmile = face("JUAN-SMILE", "Juan | P0-02 | Cara sonrisa tank negra | 004.jpg", "Juan");
+  const room = face("ROOM-BOGOTA", "BOGOTA_WINDOW_ROOM.png", "");
+  room.role = "Room Anchor";
+  const couple = face("COUPLE", "Couple | P0-01 | PRIMARY pareja sofa.png", "Couple");
+  couple.role = "Couple Relationship Anchor";
   const base = packet();
-  const david = base.identity_authority[0];
-  const juanPrimary = { ...anchor("FILE-JUAN-P01"), subject: "Juan" };
-  const davidRefs = ["FILE-D2", "FILE-D3", "FILE-D4", "FILE-D5", "FILE-D6"].map(anchor);
-  const juanRefs = ["FILE-J2", "FILE-J6"].map((id) => ({ ...anchor(id), subject: "Juan" }));
-  const room = { ...anchor("FILE-RIC-ROOM"), role: "Room Anchor", subject: "" };
-  const value: GenerationPacket = {
+  const quality: GenerationPacket = {
     ...base,
     subjects: ["David", "Juan"],
+    credit_mode: "QUALITY",
+    scene_text: "David y Juan juntos en Bogotá, sonrisa leve",
     identity_authority: [
-      { ...david, priority_0_refs: [david.primary_identity_anchor!, ...davidRefs] },
-      { ...david, subject: "Juan", primary_identity_anchor: juanPrimary,
-        priority_0_refs: [juanPrimary, ...juanRefs] },
+      {
+        subject: "David",
+        master_pack_id: "PACK-1",
+        primary_identity_anchor: davidPrimary,
+        priority_0_refs: [davidPrimary, davidFront, davidQuarter],
+        supporting_anchors: [],
+        body_anchor: null,
+        expression_support: [],
+        hairstyle_grooming_locks: [],
+        tattoo_body_locks: [],
+      },
+      {
+        subject: "Juan",
+        master_pack_id: "PACK-2",
+        primary_identity_anchor: juanPrimary,
+        priority_0_refs: [juanPrimary, juanGlasses, juanSmile],
+        supporting_anchors: [],
+        body_anchor: null,
+        expression_support: [],
+        hairstyle_grooming_locks: [],
+        tattoo_body_locks: [],
+      },
     ],
     location_anchors: [room],
-    reference_files: [david.primary_identity_anchor!, juanPrimary, ...davidRefs, ...juanRefs, room],
+    relationship_anchors: [couple],
+    reference_files: [davidPrimary, davidFront, davidQuarter, juanPrimary, juanGlasses, juanSmile, room, couple],
   };
-  const result = await generationToolResult(value, [], async (fileId) => ({
-    ok: true, mime_type: "image/png", data_base64: Buffer.from(fileId).toString("base64"),
-  }), "QUALITY");
-  const attached = (result.structuredContent as { reference_delivery: { attached: string[] } })
-    .reference_delivery.attached;
-  assert.equal(attached.length, 6);
-  for (const id of ["FILE-PRIMARY-001", "FILE-JUAN-P01", "FILE-RIC-ROOM", "FILE-J2", "FILE-D2"]) {
-    assert.equal(attached.includes(id), true, `${id} must be attached`);
-  }
-  assert.equal(attached.filter((id) => id.startsWith("FILE-J")).length >= 2, true);
+  const { selected } = selectDeliveryAnchors(quality, []);
+  assert.deepEqual(selected.map((item) => item.file_id), [
+    "DAVID-PRIMARY",
+    "JUAN-PRIMARY",
+    "DAVID-QUARTER",
+    "JUAN-SMILE",
+    "ROOM-BOGOTA",
+    "COUPLE",
+  ]);
+});
+
+test("ECONOMY stays on primaries even when extra P0 and a room exist", () => {
+  const davidPrimary = face("DAVID-PRIMARY", "David frontal.png", "David");
+  const davidQuarter = face("DAVID-QUARTER", "David tres cuartos.png", "David");
+  const base = packet();
+  const economy: GenerationPacket = {
+    ...base,
+    credit_mode: "ECONOMY",
+    scene_text: "playa",
+    identity_authority: [{
+      subject: "David",
+      master_pack_id: "PACK-1",
+      primary_identity_anchor: davidPrimary,
+      priority_0_refs: [davidPrimary, davidQuarter],
+      supporting_anchors: [],
+      body_anchor: null,
+      expression_support: [],
+      hairstyle_grooming_locks: [],
+      tattoo_body_locks: [],
+    }],
+    location_anchors: [{ ...face("ROOM", "PLAYA_ROOM.png", ""), role: "Room Anchor" }],
+  };
+  const { selected } = selectDeliveryAnchors(economy, []);
+  assert.deepEqual(selected.map((item) => item.file_id), ["DAVID-PRIMARY"]);
+});
+
+test("three subjects keep one primary each and do not add complements", () => {
+  const base = packet();
+  const subjects = ["David", "Juan", "Mambo"].map((subject) => {
+    const primary = face(`${subject}-PRIMARY`, `${subject} frontal.png`, subject);
+    return {
+      subject,
+      master_pack_id: "PACK",
+      primary_identity_anchor: primary,
+      priority_0_refs: [primary, face(`${subject}-QUARTER`, `${subject} tres cuartos.png`, subject)],
+      supporting_anchors: [],
+      body_anchor: null,
+      expression_support: [],
+      hairstyle_grooming_locks: [],
+      tattoo_body_locks: [],
+    };
+  });
+  const { selected } = selectDeliveryAnchors({
+    ...base,
+    subjects: ["David", "Juan", "Mambo"],
+    credit_mode: "QUALITY",
+    scene_text: "familia en la sala",
+    identity_authority: subjects,
+  }, []);
+  assert.deepEqual(selected.map((item) => item.file_id), [
+    "David-PRIMARY",
+    "Juan-PRIMARY",
+    "Mambo-PRIMARY",
+  ]);
 });
 
 test("without credit_mode every request gets ECONOMY; an explicit mode wins", () => {
