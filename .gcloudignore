@@ -1,0 +1,14 @@
+.git
+.gitignore
+.gcloudignore
+node_modules/
+dist/
+.test-dist/
+.env
+.DS_Store
+.mcp.json
+.codex/
+apps-script-isolated/
+apps-script-recovered/
+docs/
+skills/
