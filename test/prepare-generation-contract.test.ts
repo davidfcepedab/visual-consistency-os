@@ -1250,3 +1250,106 @@ test("one canonical Primary plus extra approved P0 angles is not ambiguous", () 
   assert.ok(!packet.blockers.some((b) => b.code === "AMBIGUOUS_IDENTITY_AUTHORITY"));
   assert.ok(!packet.warnings.some((w) => w.code === "AMBIGUOUS_IDENTITY_AUTHORITY_RESOLVED"));
 });
+
+
+test("Family is a composition label and does not require its own facial P0", async () => {
+  const snapshot = authoritySnapshot();
+  snapshot.asset_registry.push({
+    asset_id: "AST-MAMBO-P0",
+    subjects: "Mambo",
+    scope: "Identity Anchor",
+    status: "PRIORITY_0_PRIMARY",
+    source_file_id: "FILE-MAMBO-P0",
+    file_name: "Mambo | Real primary.jpeg",
+    human_anchor_approval: "APPROVED",
+    provenance_state: "APPROVAL_TRACEABLE",
+  });
+  const result = await handlersFor(snapshot).prepareGeneration({
+    project: "TEST-FAMILY-COMPOSITION",
+    subjects: ["Family", "David", "Juan", "Mambo"],
+    user_instruction: "Generate one real family photograph with David, Juan and Mambo.",
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(result.subjects, ["David", "Juan", "Mambo"]);
+  assert.equal(result.ready_to_generate, true);
+  assert.equal(result.identity_authority.length, 3);
+  assert.ok(result.identity_authority.every(authority => authority.primary_identity_anchor));
+  assert.equal(result.blockers.some(blocker => blocker.subject === "Family"), false);
+});
+
+test("Family composition does not silently invent absent members", async () => {
+  const result = await handlersFor(authoritySnapshot()).prepareGeneration({
+    project: "TEST-FAMILY-DAVID-MAMBO",
+    subjects: ["Family", "David", "Mambo"],
+    user_instruction: "A candid photograph of David and Mambo at home.",
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(result.subjects, ["David", "Mambo"]);
+  assert.equal(result.ready_to_generate, true);
+  assert.equal(result.identity_authority.some(authority => authority.subject === "Juan"), false);
+});
+
+test("Family-only input blocks without manufacturing individual references", async () => {
+  const writes: Record<string, unknown>[] = [];
+  const result = await handlersFor(authoritySnapshot(), writes).prepareGeneration({
+    project: "TEST-FAMILY-UNSPECIFIED",
+    subjects: ["Family"],
+    user_instruction: "An informal family portrait.",
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.ready_to_generate, false);
+  assert.deepEqual(result.subjects, []);
+  assert.ok(result.blockers.some(blocker => blocker.code === "MISSING_IDENTITY_ANCHOR"));
+  assert.equal(writes.length, 0);
+});
+
+test("Family composition cannot override missing constituent identity authority", async () => {
+  const snapshot = authoritySnapshot();
+  snapshot.asset_registry = snapshot.asset_registry.filter(record => record.asset_id !== "AST-JUAN-P0");
+  const result = await handlersFor(snapshot).prepareGeneration({
+    project: "TEST-FAMILY-MISSING-JUAN",
+    subjects: ["Family", "David", "Juan"],
+    user_instruction: "Photo of David and Juan.",
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.ready_to_generate, false);
+  assert.ok(result.blockers.some(blocker => blocker.subject === "Juan"));
+});
+
+test("Canon Family verification is explicitly derived, not a Family P0 promotion", async () => {
+  const snapshot = authoritySnapshot();
+  snapshot.asset_registry.push({
+    asset_id: "AST-MAMBO-P0",
+    subjects: "Mambo",
+    scope: "Identity Anchor",
+    status: "PRIORITY_0_PRIMARY",
+    source_file_id: "FILE-MAMBO-P0",
+    file_name: "Mambo | Real primary.jpeg",
+    human_anchor_approval: "APPROVED",
+  });
+  const result = await handlersFor(snapshot).getCanonSummary({ subjects: ["Family"] });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const family = result.identities[0];
+  assert.equal(family.subject, "Family");
+  assert.equal("role" in family && family.role, "COMPOSITION_ONLY");
+  assert.equal("facial_authority" in family && family.facial_authority, false);
+  assert.equal("verification_scope" in family && family.verification_scope, "MEMBER_IDENTITIES_ONLY");
+  assert.equal("verification_status" in family && family.verification_status, "VERIFIED_DERIVED");
+  assert.equal("family_composition_anchor_status" in family && family.family_composition_anchor_status, "NOT_ASSESSED");
+});
+
+test("Explicit Family governance hold cannot be bypassed by derived member status", async () => {
+  const snapshot = authoritySnapshot();
+  snapshot.config.FAMILY_STATUS = "HOLD";
+  const result = await handlersFor(snapshot).getCanonSummary({ subjects: ["Family"] });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const family = result.identities[0];
+  assert.equal("state" in family && family.state, "HOLD");
+  assert.equal("verification_status" in family && family.verification_status, "NOT_VERIFIED");
+});

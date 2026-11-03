@@ -258,12 +258,18 @@ function canonicalizeSubject(value: string): string {
   return text.replace(/\s+/g, " ");
 }
 
+// A group label determines how subjects interact, not who is physically present.
+// Family may mean David+Mambo, Juan+Mambo, or all three: never infer members.
+const COMPOSITION_ONLY_SUBJECTS = new Set(["Couple", "Family"]);
+
 export function normalizeSubjects(subjects: string[]): string[] {
   const out: string[] = [];
   for (const raw of subjects) {
     for (const part of raw.split(/\s*(?:\||\+|,|&| and )\s*/i)) {
       const canonical = canonicalizeSubject(part);
-      if (canonical && !out.includes(canonical)) out.push(canonical);
+      if (canonical && !COMPOSITION_ONLY_SUBJECTS.has(canonical) && !out.includes(canonical)) {
+        out.push(canonical);
+      }
     }
   }
   return out;
@@ -1513,6 +1519,13 @@ export function prepareGenerationPacket(
   });
   const blockers: Blocker[] = [...readiness.blockers];
   const warnings: GenerationWarning[] = [...readiness.warnings];
+  if (subjects.length === 0) {
+    blockers.push({
+      code: "MISSING_IDENTITY_ANCHOR",
+      subject: parsed.subjects[0],
+      message: "Family and Couple are composition labels, not individual identity sources. List the actual people/pet present (David, Juan, and/or Mambo) in subjects. No absent member or P0 will be invented.",
+    });
+  }
 
   const declaredRequiredIds = unique(parsed.required_anchor_ids || []).filter(
     (id) => !isLocationRequirementId(id)
@@ -1802,8 +1815,33 @@ export function createPrepareGenerationHandlers(input: {
               relationship_anchors: coupleAnchors(snapshot) };
           }
           if (subject === "Family") {
-            const state = configValue(snapshot.config, "FAMILY_STATUS");
-            return { subject, state: state || "UNKNOWN", verification_status: state ? "VERIFIED_SOURCE" : "NOT_VERIFIED" };
+            // Family has no facial P0. Its readiness can only be derived from
+            // independently verified members; it does not approve a Family
+            // composition photo or promote any Family asset.
+            const configuredState = configValue(snapshot.config, "FAMILY_STATUS").toUpperCase();
+            const governanceHold = ["HOLD", "BLOCKED", "REJECTED", "NEEDS_REVIEW", "UNVERIFIED"].includes(configuredState);
+            const members = ["David", "Juan", "Mambo"].map(member => {
+              const authority = resolveSubjectAuthority(member, snapshot);
+              const detailLocks = collectRecords(snapshot)
+                .filter(({ record }) => !hasUnavailableReference(record) &&
+                  classifyRole(record) === "Detail Lock" && matchesSubject(record, member))
+                .map(({ record, source }) => toAnchor(record, source, member));
+              const verified = hasUsableIdentityAuthority(authority, detailLocks) &&
+                !hasUnresolvedCompetingAuthorities(authority);
+              return { subject: member, resolution_status: verified ? "VERIFIED" : "NEEDS_REVIEW" };
+            });
+            const derivedVerified = !governanceHold &&
+              members.every(member => member.resolution_status === "VERIFIED");
+            return {
+              subject,
+              role: "COMPOSITION_ONLY",
+              facial_authority: false,
+              state: governanceHold ? configuredState : derivedVerified ? "VERIFIED" : "NEEDS_REVIEW",
+              verification_status: derivedVerified ? "VERIFIED_DERIVED" : "NOT_VERIFIED",
+              verification_scope: "MEMBER_IDENTITIES_ONLY",
+              member_identity_statuses: members,
+              family_composition_anchor_status: "NOT_ASSESSED",
+            };
           }
           const authority = resolveSubjectAuthority(subject, snapshot);
           const primary = authority.primary_identity_anchor;
